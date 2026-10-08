@@ -1,0 +1,30 @@
+# ===== Godot =====
+# 导入缓存：随机器/引擎版本变化，不能进版本库（别人 clone 后 Godot 会自己重建）
+.godot/
+.import/
+export.cfg
+# 可能含 Android 签名口令 / 商店密钥，官方模板也建议忽略
+export_presets.cfg
+*.translation
+.mono/
+data_*/
+
+# ===== 导出产物 =====
+build/
+dist/
+*.pck
+*.zip
+
+# ===== 系统 / 编辑器 =====
+.DS_Store
+._*
+Thumbs.db
+*~
+*.swp
+.idea/
+.vscode/
+
+# ===== 本机工具状态 =====
+# WorkBuddy 的项目记忆笔记（对话过程中积累的踩坑记录），属于本地工作数据，
+# 不是游戏源码，默认不纳入版本管理。要一起提交就把下面这行去掉。
+.workbuddy/
