@@ -12,6 +12,10 @@ var current: int = 0                   ## 当前行动玩家 id
 var phase: int = Phase.SETUP
 var round: int = 0                     ## 完整轮数
 var dice: int = 0
+## 本回合骰子是否已掷出。
+## ⚠️ 不能用 dice == 0 判断"还没掷"——上一回合的值会残留到下一回合，
+## 骑士在掷骰前打出时必须靠这个标记才能知道"放完强盗该回掷骰还是进主阶段"。
+var dice_rolled: bool = false
 var turn_actions_done: int = 0         ## 本回合已执行的动作数（保险丝）
 var dev_played_this_turn: bool = false ## 每回合最多打 1 张发展卡
 var free_roads_remaining: int = 0      ## 修路卡剩余的免费道路数

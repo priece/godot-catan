@@ -16,6 +16,9 @@ enum S {
 	SETUP_AI,
 	ROBBER_HUMAN,
 	ROBBER_AI,
+	## 人类回合的"掷骰前"窗口：官方规则允许在掷骰前打出功能卡（骑士/修路/丰收/垄断）。
+	## 这个状态下**不能建造、不能交易、不能结束回合**，只能掷骰或打 1 张发展卡。
+	HUMAN_PREROLL,
 	HUMAN_TURN,
 	AI_TURN,
 	GAME_OVER,
@@ -82,6 +85,7 @@ func bind(board_view: BoardView, hud_node: HUD) -> void:
 	hud.buy_dev_pressed.connect(_on_buy_dev)
 	hud.play_dev_pressed.connect(_on_play_dev)
 	hud.bank_trade_pressed.connect(_on_bank_trade)
+	hud.roll_dice_pressed.connect(_on_roll_dice)
 	hud.restart_pressed.connect(_on_restart)
 
 	board.vertex_clicked.connect(_on_vertex_clicked)
@@ -190,15 +194,39 @@ func _enter_setup() -> void:
 	else:
 		_set_state(S.SETUP_HUMAN, 0.0)
 
+## 回合起点分两步：先 start_turn（重置标记），再看要不要把"掷骰前"这一拍交给人类。
+##
+## 只有人类、且手上真有能打的功能卡时才停——否则直接替他掷掉，
+## 免得每回合都多一次无意义的点击（这是需求里"没有骑士卡则自动掷骰"的推广：
+## 一张能打的卡都没有就自动掷）。
 func _begin_next_turn() -> void:
 	if ctl.check_win():
 		_enter_game_over()
 		return
-	ctl.begin_turn()
+	ctl.start_turn()
+	if not ctl.is_ai(ctl.st.current) and _human_can_play_dev():
+		_set_state(S.HUMAN_PREROLL, 0.0)
+		return
+	_roll_and_branch()
+
+## 掷骰并按结果分流（AI 与"人类无需选择"时共用）
+func _roll_and_branch() -> void:
+	ctl.roll_dice()
 	if ctl.has_pending_robber():
 		_enter_robber_phase()
 		return
 	_enter_main_phase()
+
+## 人类现在有没有"能打的发展卡"：本回合还没打过，且手上有非胜利点的旧卡。
+## 本回合刚买的卡在 fresh_dev_cards 里，finish_turn 才并入，天然不满足。
+func _human_can_play_dev() -> bool:
+	if ctl.st.dev_played_this_turn:
+		return false
+	var p: PlayerState = ctl.st.players[HUMAN]
+	for card in Rules.playable_dev_cards(p):
+		if card != Res.Dev.VICTORY:
+			return true
+	return false
 
 func _enter_robber_phase() -> void:
 	if ctl.is_ai(ctl.st.current):
@@ -293,19 +321,28 @@ func _on_buy_dev() -> void:
 	if ctl.apply_action(HUMAN, {"type": Res.A_BUY_DEV}):
 		_after_human_action()
 
-func _on_play_dev(card: int) -> void:
-	if state != S.HUMAN_TURN:
+## 打发展卡：掷骰前（HUMAN_PREROLL）和主阶段（HUMAN_TURN）都能打。
+## r / r1 / r2 由弹窗里玩家自己选（垄断选 1 种资源、丰收选 2 张，可相同）；
+## 不需要参数的卡片传 -1。合法性仍由 apply_action 兜底 —— 每回合 1 张、
+## 当回合买的不能打，都是规则层的事，Director 不重复判断。
+func _on_play_dev(card: int, r: int, r1: int, r2: int) -> void:
+	if state != S.HUMAN_TURN and state != S.HUMAN_PREROLL:
 		return
 	var action := {"type": Res.A_PLAY_DEV, "card": card}
 	match card:
 		Res.Dev.MONOPOLY:
-			action["r"] = _best_monopoly_resource()
+			action["r"] = r
 		Res.Dev.YEAR_OF_PLENTY:
-			var need := _two_most_needed()
-			action["r1"] = need[0]
-			action["r2"] = need[1]
+			action["r1"] = r1
+			action["r2"] = r2
 	if ctl.apply_action(HUMAN, action):
 		_after_human_action()
+
+## 「掷骰子」按钮：只在掷骰前的窗口里有效
+func _on_roll_dice() -> void:
+	if state != S.HUMAN_PREROLL:
+		return
+	_roll_and_branch()
 
 func _on_bank_trade(give_r: int, take_r: int) -> void:
 	if state != S.HUMAN_TURN:
@@ -338,12 +375,19 @@ func _on_edge_clicked(e: int) -> void:
 			if ctl.apply_action(HUMAN, {"type": Res.A_PLACE_ROAD, "edge": e}):
 				_after_human_action()
 
+## 放下强盗后去哪，取决于**骰子掷没掷**：
+##   · 掷出 7 触发的 → 进主阶段；
+##   · 掷骰前打骑士触发的 → 回 HUMAN_PREROLL 继续掷骰，
+##     否则这回合的骰子就永远掷不出来（最容易漏的一步）。
 func _on_hex_clicked(h: int) -> void:
 	if state != S.ROBBER_HUMAN:
 		return
 	ctl.place_robber(HUMAN, h)
 	board.redraw()
-	_enter_main_phase()
+	if ctl.st.dice_rolled:
+		_enter_main_phase()
+	else:
+		_set_state(S.HUMAN_PREROLL, 0.0)
 
 func _after_human_action() -> void:
 	board.redraw()
@@ -360,8 +404,14 @@ func _after_human_action() -> void:
 func _refresh() -> void:
 	if ctl == null:
 		return
-	hud.refresh(ctl.st, _status_text(), state == S.HUMAN_TURN or state == S.SETUP_HUMAN or state == S.ROBBER_HUMAN)
-	hud.set_turn_info(ctl.st.round, ctl.st.dice)
+	# can_act = 人类现在能操作；main_phase = 是否已经掷过骰、能建造和交易。
+	# 掷骰前的窗口里"能操作"但"不能建造"，两件事必须分开传，
+	# 否则玩家能在产出之前先偷建。
+	hud.refresh(ctl.st, _status_text(),
+		state == S.HUMAN_TURN or state == S.HUMAN_PREROLL or state == S.SETUP_HUMAN or state == S.ROBBER_HUMAN,
+		state == S.HUMAN_TURN, state == S.HUMAN_PREROLL)
+	# 没掷骰时不显示骰子：st.dice 还留着上回合的值，显示出来会被误读
+	hud.set_turn_info(ctl.st.round, ctl.st.dice if ctl.st.dice_rolled else 0)
 	hud.set_log(ctl.st.log_lines)
 	_update_highlights()
 
@@ -391,7 +441,9 @@ func _update_highlights() -> void:
 			if me.has(Res.COST_ROAD) or ctl.st.free_roads_remaining > 0:
 				es = Rules.valid_road_edges(ctl.st, HUMAN, false)
 			board.set_pick_mode(BoardView.Pick.ANY)
-		_:
+		S.HUMAN_PREROLL, _:
+			# 掷骰前不能点棋盘：建造、交易按官方规则都在产出之后，
+			# 这里放开会让玩家在没拿到资源前先偷建。
 			board.set_pick_mode(BoardView.Pick.NONE)
 	board.set_highlights(vs, es, hs)
 
@@ -404,9 +456,13 @@ func _status_text() -> String:
 		S.SETUP_AI:
 			return "%s 正在布置初始位置…" % _who(ctl.setup_pid())
 		S.ROBBER_HUMAN:
-			return "你掷出了 7：点任意地块放强盗（封产出 + 偷 1 张牌）"
+			if ctl.st.dice_rolled:
+				return "你掷出了 7：点任意地块放强盗（封产出 + 偷 1 张牌）"
+			return "打出骑士：点任意地块放强盗（封产出 + 偷 1 张牌），放完还要掷骰"
 		S.ROBBER_AI:
 			return "%s 正在移动强盗…" % _who(ctl.st.current)
+		S.HUMAN_PREROLL:
+			return "轮到你了：先「掷骰子」，或打出 1 张发展卡（本回合只能打 1 张，打出后仍需掷骰）"
 		S.HUMAN_TURN:
 			var me: PlayerState = ctl.st.players[HUMAN]
 			var can_build := me.has(Res.COST_SETTLEMENT) or me.has(Res.COST_CITY) \
@@ -434,27 +490,3 @@ func _who(pid: int) -> String:
 		return "%s（%s）" % [p.label, diff_name(p.difficulty)]
 	return p.label
 
-func _best_monopoly_resource() -> int:
-	var best := 0
-	var best_n := -1
-	for r in Res.R_COUNT:
-		var n := 0
-		for p in ctl.st.players:
-			if p.id != HUMAN:
-				n += p.resources[r]
-		if n > best_n:
-			best_n = n
-			best = r
-	return best
-
-func _two_most_needed() -> Array:
-	var p: PlayerState = ctl.st.players[HUMAN]
-	var need: Array = []
-	for r in Res.R_COUNT:
-		var n := 0
-		for cost in [Res.COST_CITY, Res.COST_SETTLEMENT, Res.COST_DEV]:
-			n = maxi(n, maxi(0, cost.get(r, 0) - p.resources[r]))
-		need.append([r, n])
-	need.sort_custom(func(a, b): return a[1] > b[1])
-	var second: int = need[1][0] if need.size() > 1 else need[0][0]
-	return [need[0][0], second]

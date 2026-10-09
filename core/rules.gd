@@ -124,6 +124,25 @@ static func can_buy_dev(st: GameState, pid: int) -> bool:
 static func playable_dev_cards(p: PlayerState) -> Array[int]:
 	return p.dev_cards.duplicate()
 
+## 垄断卡：打出时能收走多少张资源 r —— 只算**对手**手里的，
+## 自己手里的牌不会被自己垄断走。弹窗用它显示"×N"，
+## N == 0 时那一项禁用（收 0 张的空操作没有任何意义）。
+static func monopoly_yield(st: GameState, pid: int, r: int) -> int:
+	var n := 0
+	for p in st.players:
+		if p.id != pid:
+			n += p.resources[r]
+	return n
+
+## 垄断 tooltip：把合计拆到每个对手头上，方便玩家判断垄断哪个最划算。
+## 单机人机里对手手牌本来是隐藏信息，这里按需求明牌显示。
+static func monopoly_breakdown(st: GameState, pid: int, r: int) -> String:
+	var parts: Array[String] = []
+	for p in st.players:
+		if p.id != pid and p.resources[r] > 0:
+			parts.append("%s %d" % [p.label, p.resources[r]])
+	return "、".join(parts) if not parts.is_empty() else "对手都没有"
+
 # ---------------- 资源 ----------------
 
 static func can_afford(p: PlayerState, cost: Dictionary) -> bool:

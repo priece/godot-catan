@@ -10,8 +10,14 @@ extends CanvasLayer
 
 signal end_turn_pressed
 signal buy_dev_pressed
-signal play_dev_pressed(card: int)
+## 打出发展卡。参数按卡片类型取用，不需要的填 -1：
+##   · 垄断 MONOPOLY  → r = 指定的资源
+##   · 丰收年 YEAR_OF_PLENTY → r1 / r2 = 拿的 2 张（可以相同）
+##   · 骑士 / 修路    → 全 -1
+signal play_dev_pressed(card: int, r: int, r1: int, r2: int)
 signal bank_trade_pressed(give_r: int, take_r: int)
+## 「掷骰子」按钮：只在回合开始的"掷骰前"窗口里有效
+signal roll_dice_pressed
 ## 参数是种子输入框的文本："" = 沿用上一局，"r" = 随机，
 ## 其他字符串交给 GameDirector 解析（非法值它自己兜底）。
 signal restart_pressed(seed_text: String)
@@ -21,6 +27,14 @@ const PANEL_W := 384.0
 const VIEW_H := 720.0
 
 const DEV_LABEL := ["骑士", "胜利点", "修路", "丰收年", "垄断"]
+
+## 选卡弹窗里的效果说明。玩家得先知道打出会发生什么，才谈得上选择。
+const DEV_TIP := {
+	Res.Dev.KNIGHT: "移动强盗到任意地块，封住该地产出，并从相邻的对手手里偷 1 张牌",
+	Res.Dev.ROAD_BUILDING: "立刻免费放 2 条路（不消耗资源）",
+	Res.Dev.YEAR_OF_PLENTY: "从银行拿走任意 2 张资源，可以拿 2 张相同的",
+	Res.Dev.MONOPOLY: "指定 1 种资源，把所有对手手里的该资源全部收走",
+}
 
 ## "重开一局"是破坏性操作（会丢掉当前进度），所以点开一个面板让玩家
 ## 看清要发生什么、顺便选种子，替代原来"点两下"的裸确认。
@@ -41,10 +55,51 @@ var _dice: Label
 var _btn_end: Button
 var _btn_buy: Button
 var _btn_restart: Button
-var _trade_grid: GridContainer
-var _trade_title: Label
-var _dev_grid: GridContainer
-var _dev_title: Label
+## 「掷骰子」/「打发展卡」：回合开始的掷骰前窗口里才有掷骰子，
+## 打发展卡则掷骰前后都能点（官方规则允许骑士等卡在掷骰前打出）。
+var _btn_roll: Button
+var _btn_play: Button
+var _act_row: HBoxContainer    ## 结束回合 / 买发展卡 / 兑换 —— 掷骰前整行隐藏
+## 银行兑换弹窗（替代原来那排"点一下即换"的按钮）：
+## 左列 = 可付出的资源（带当前比例 4/3/2），右列 = 换回的资源，
+## 两侧都能点选高亮，底部 确定/取消。
+var _btn_trade: Button
+var _trade_dlg: Control
+var _trade_card: PanelContainer
+var _trade_give_box: VBoxContainer
+var _trade_take_box: VBoxContainer
+var _trade_hint: Label
+var _trade_ok: Button
+var _trade_give_btns: Array = []   ## 左列按钮，下标 = 资源 id
+var _trade_take_btns: Array = []   ## 右列按钮，下标 = 资源 id
+var _give_sel := -1                ## 左列当前选中（-1 = 未选）
+var _take_sel := -1                ## 右列当前选中（-1 = 未选）
+var _st: GameState                 ## refresh() 时留存的最新局面，开弹窗时用
+var _can_act := false
+
+## 发展卡弹窗（三级）：
+##   _dev_dlg  选卡 → 骑士/修路直接打出，垄断/丰收再开二级弹窗选资源
+##   _mono_dlg 垄断：单列 5 项，显示对手合计 ×N
+##   _yop_dlg  丰收：左右两列各 5 项，允许选同一种
+var _dev_dlg: Control
+var _dev_card: PanelContainer
+var _dev_box: VBoxContainer
+var _mono_dlg: Control
+var _mono_card: PanelContainer
+var _mono_box: VBoxContainer
+var _mono_hint: Label
+var _mono_ok: Button
+var _mono_btns: Array = []
+var _mono_sel := -1
+var _yop_dlg: Control
+var _yop_card: PanelContainer
+var _yop_left: VBoxContainer
+var _yop_right: VBoxContainer
+var _yop_hint: Label
+var _yop_ok: Button
+var _yop_btns: Array = []      ## 两列各 5 个：_yop_btns[0][r] / _yop_btns[1][r]
+var _yop_sel: Array = [-1, -1]
+
 var _log_title: Label
 var _log: RichTextLabel
 
@@ -53,6 +108,10 @@ var _dev_sig := ""
 
 func _ready() -> void:
 	_build()
+	_build_trade_dialog()
+	# 三个发展卡弹窗按"层级从下到上"的顺序建：后加的子节点盖在前面之上，
+	# 所以二级弹窗（垄断/丰收）要建在选卡弹窗之后。
+	_build_dev_dialogs()
 	# 卡片高度依赖说明文字换行后的实际排版，得等一帧布局完再居中
 	await _build_dialog()
 
@@ -170,9 +229,11 @@ func _build_dialog() -> void:
 	await get_tree().process_frame
 	_center_card(card)
 
-func _center_card(card: Control) -> void:
+func _center_card(card: Control, width: float = 320.0) -> void:
 	var vp := get_viewport().get_visible_rect().size
-	card.size = Vector2(320.0, maxf(card.size.y, 150.0))
+	# 隐藏状态下 card.size 不可靠，用 combined minimum 兜底（内容高度事先算不准）
+	var h: float = maxf(maxf(card.size.y, card.get_combined_minimum_size().y), 150.0)
+	card.size = Vector2(width, h)
 	card.position = ((vp - card.size) * 0.5).round()
 
 func _input_style(focused: bool = false) -> StyleBoxFlat:
@@ -183,7 +244,10 @@ func _input_style(focused: bool = false) -> StyleBoxFlat:
 	sb.set_corner_radius_all(7)
 	return sb
 
-func _card_style() -> StyleBoxFlat:
+## 卡片样式。pad 是内容到边框的内边距 ——
+## ⚠️ StyleBoxFlat 的 content_margin 默认是 0，不显式设就会让内容直接贴着
+## 边框（看着像没做排版）。两个弹窗共用这一份，保证内边距一致。
+func _card_style(pad: float = 16.0) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(1, 1, 1)
 	sb.border_color = Color(0.86, 0.85, 0.82)
@@ -191,6 +255,10 @@ func _card_style() -> StyleBoxFlat:
 	sb.set_corner_radius_all(12)
 	sb.shadow_color = Color(0, 0, 0, 0.20)
 	sb.shadow_size = 14
+	sb.content_margin_left = pad
+	sb.content_margin_right = pad
+	sb.content_margin_top = pad
+	sb.content_margin_bottom = pad
 	return sb
 
 ## 种子只可能是数字，所以直接把非数字字符挡在输入框外。
@@ -246,9 +314,9 @@ func _fire_restart() -> void:
 	restart_pressed.emit(t)
 
 func _unhandled_input(event: InputEvent) -> void:
-	if not _dlg.visible:
+	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return
-	if event is InputEventKey and event.pressed and not event.echo:
+	if _dlg.visible:
 		if event.keycode == KEY_ESCAPE:
 			# Esc 关掉浮层，别让玩家以为游戏卡住了
 			close_dialog()
@@ -257,6 +325,32 @@ func _unhandled_input(event: InputEvent) -> void:
 			# 输入框有焦点时回车走 LineEdit.text_submitted，这里兜住
 			# "焦点跑到别处（比如点了快捷按钮）后按回车"的情况。
 			_fire_restart()
+			get_viewport().set_input_as_handled()
+	elif _yop_dlg != null and _yop_dlg.visible:
+		# 弹窗可能叠着开（选卡 → 丰收），Esc 只关最上面那层，底下的选卡弹窗留着
+		if event.keycode == KEY_ESCAPE:
+			close_yop_dialog()
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
+			_confirm_yop()
+			get_viewport().set_input_as_handled()
+	elif _mono_dlg != null and _mono_dlg.visible:
+		if event.keycode == KEY_ESCAPE:
+			close_mono_dialog()
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
+			_confirm_mono()
+			get_viewport().set_input_as_handled()
+	elif _dev_dlg != null and _dev_dlg.visible:
+		if event.keycode == KEY_ESCAPE:
+			close_dev_dialog()
+			get_viewport().set_input_as_handled()
+	elif _trade_dlg != null and _trade_dlg.visible:
+		if event.keycode == KEY_ESCAPE:
+			close_trade_dialog()
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
+			_confirm_trade()
 			get_viewport().set_input_as_handled()
 
 ## 新开一局时清掉各种"增量刷新"的缓存，否则新旧界面的按钮可能对不上
@@ -267,6 +361,10 @@ func on_new_game(cur_seed: int) -> void:
 	_log_last = ""
 	_cur_seed = cur_seed
 	close_dialog()
+	close_trade_dialog()
+	close_dev_dialog()
+	close_mono_dialog()
+	close_yop_dialog()
 
 # ================= 构建 =================
 
@@ -315,33 +413,39 @@ func _build() -> void:
 	_dice = _label("", 13, UIPalette.MUTED, true)
 	box.add_child(_dice)
 
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	box.add_child(row)
+	# 掷骰行：「掷骰子」只在掷骰前的窗口里出现（其余状态隐藏，避免误点），
+	# 「打发展卡」掷骰前后都能用，所以留在这行里。
+	var roll_row := HBoxContainer.new()
+	roll_row.add_theme_constant_override("separation", 8)
+	box.add_child(roll_row)
+	_btn_roll = _button("掷骰子", true)
+	_btn_roll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_btn_roll.tooltip_text = "掷两颗骰子，结算本回合产出"
+	_btn_roll.pressed.connect(func(): roll_dice_pressed.emit())
+	roll_row.add_child(_btn_roll)
+	_btn_play = _button("打发展卡")
+	_btn_play.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_btn_play.tooltip_text = "打出 1 张发展卡：掷骰前、掷骰后都可以，每回合限 1 张"
+	_btn_play.pressed.connect(show_dev_dialog)
+	roll_row.add_child(_btn_play)
+
+	# 主阶段的操作行。掷骰前整行隐藏 —— 那时不能建造、不能交易、不能结束回合。
+	_act_row = HBoxContainer.new()
+	_act_row.add_theme_constant_override("separation", 8)
+	box.add_child(_act_row)
 	_btn_end = _button("结束回合")
 	_btn_end.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_btn_end.pressed.connect(func(): end_turn_pressed.emit())
-	row.add_child(_btn_end)
+	_act_row.add_child(_btn_end)
 	_btn_buy = _button("买发展卡")
 	_btn_buy.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_btn_buy.pressed.connect(func(): buy_dev_pressed.emit())
-	row.add_child(_btn_buy)
-
-	_trade_title = _label("银行交易（点一下即换）", 12, UIPalette.MUTED, true)
-	box.add_child(_trade_title)
-	_trade_grid = GridContainer.new()
-	_trade_grid.columns = 2
-	_trade_grid.add_theme_constant_override("h_separation", 6)
-	_trade_grid.add_theme_constant_override("v_separation", 4)
-	box.add_child(_trade_grid)
-
-	_dev_title = _label("发展卡", 12, UIPalette.MUTED, true)
-	box.add_child(_dev_title)
-	_dev_grid = GridContainer.new()
-	_dev_grid.columns = 2
-	_dev_grid.add_theme_constant_override("h_separation", 6)
-	_dev_grid.add_theme_constant_override("v_separation", 4)
-	box.add_child(_dev_grid)
+	_act_row.add_child(_btn_buy)
+	_btn_trade = _button("兑换")
+	_btn_trade.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_btn_trade.tooltip_text = "与银行兑换资源：4:1，任意型港口 3:1，特定型港口 2:1"
+	_btn_trade.pressed.connect(show_trade_dialog)
+	_act_row.add_child(_btn_trade)
 
 	_log_title = _label("事件日志", 12, UIPalette.MUTED, true)
 	box.add_child(_log_title)
@@ -418,8 +522,16 @@ func _make_player_row(pid: int) -> Control:
 # ================= 刷新 =================
 
 ## status: 当前该干嘛（玩家看得懂的提示）
-## can_act: 人类玩家现在能否操作
-func refresh(st: GameState, status: String, can_act: bool) -> void:
+## can_act: 人类玩家现在能否操作（含布置、放强盗这些"能点棋盘"的时刻）
+## main_phase: 是否已掷过骰、能建造 / 交易 / 结束回合
+## preroll: 正处在回合开始的掷骰前窗口
+##
+## ⚠️ can_act 和 main_phase 必须分开：掷骰前玩家"能操作"（可以打发展卡），
+## 但"不能建造"—— 合成一个布尔就会让他在拿到产出前先偷建。
+func refresh(st: GameState, status: String, can_act: bool, main_phase: bool = true, preroll: bool = false) -> void:
+	# 兑换弹窗打开时要用当前比例和库存，把局面留一份在 HUD 上
+	_st = st
+	_can_act = can_act
 	for pid in 4:
 		var p: PlayerState = st.players[pid]
 		var is_active := (pid == st.current)
@@ -449,11 +561,15 @@ func refresh(st: GameState, status: String, can_act: bool) -> void:
 	_status.add_theme_color_override("font_color",
 		UIPalette.GOOD if can_act else UIPalette.INK)
 
-	_btn_end.disabled = not can_act
-	_btn_buy.disabled = not (can_act and Rules.can_buy_dev(st, 0))
+	# 掷骰前只留「掷骰子 + 打发展卡」，主阶段才给建造/交易/结束回合。
+	# 隐藏而不是置灰：灰按钮会让玩家以为"再等等就能点"，实际这个窗口里永远点不了。
+	_act_row.visible = main_phase
+	_btn_roll.visible = preroll
+	_btn_end.disabled = not (can_act and main_phase)
+	_btn_buy.disabled = not (can_act and main_phase and Rules.can_buy_dev(st, 0))
 
-	_refresh_trade(st, can_act)
-	_refresh_dev(st, can_act)
+	_refresh_trade(st, can_act and main_phase)
+	_refresh_dev_btn(st, can_act)
 
 ## 轮次与骰子
 func set_turn_info(round_no: int, dice: int) -> void:
@@ -510,77 +626,555 @@ func _res_bbcode(p: PlayerState) -> String:
 	parts.append("  券%d 骑%d" % [dev, p.played_knights])
 	return " ".join(parts)
 
-## 银行交易按钮：每个"付出资源"一个按钮，换进来的资源自动挑当前最缺的
+## 「兑换」按钮：只要有任意可行组合就亮着，具体怎么换交给弹窗里选
 func _refresh_trade(st: GameState, can_act: bool) -> void:
-	var p: PlayerState = st.players[0]
 	var opts := Rules.bank_trade_options(st, 0)
 	var sig := "%s|%s" % [can_act, str(opts)]
 	if sig == _trade_sig:
 		return
 	_trade_sig = sig
+	_btn_trade.disabled = not can_act or opts.is_empty()
 
-	for c in _trade_grid.get_children():
+# ================= 银行兑换弹窗 =================
+
+## 结构与"重开一局"弹窗同一套路：全屏遮罩 + 居中白卡片。
+## 左右两列各 5 个资源按钮，每次打开时按当前局面重建——
+## 港口比例（4/3/2）和持有量随时在变，不能建一次用到底。
+func _build_trade_dialog() -> void:
+	_trade_dlg = Control.new()
+	_trade_dlg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_trade_dlg.visible = false
+	_trade_dlg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_trade_dlg)
+
+	var shade := ColorRect.new()
+	shade.color = Color(0, 0, 0, 0.34)
+	shade.set_anchors_preset(Control.PRESET_FULL_RECT)
+	shade.mouse_filter = Control.MOUSE_FILTER_STOP
+	_trade_dlg.add_child(shade)
+
+	_trade_card = PanelContainer.new()
+	_trade_card.add_theme_stylebox_override("panel", _card_style())
+	# 宽度要算上卡片内边距（左右各 16），否则说明文字会被挤到换行溢出
+	_trade_card.custom_minimum_size = Vector2(470, 0)
+	_trade_card.mouse_filter = Control.MOUSE_FILTER_STOP
+	_trade_dlg.add_child(_trade_card)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 9)
+	_trade_card.add_child(box)
+
+	box.add_child(_label("银行兑换", 15, UIPalette.INK, true))
+
+	var tip := _label("左侧选要付出的资源，右侧选想换回的资源。比例随港口改善：银行 4:1，任意型港口 3:1，特定型港口 2:1。", 11, UIPalette.MUTED, false)
+	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	tip.custom_minimum_size = Vector2(420, 0)
+	box.add_child(tip)
+
+	var cols := HBoxContainer.new()
+	cols.add_theme_constant_override("separation", 16)
+	box.add_child(cols)
+
+	var left := VBoxContainer.new()
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left.add_theme_constant_override("separation", 4)
+	cols.add_child(left)
+	left.add_child(_label("付出", 12, UIPalette.MUTED, true))
+	_trade_give_box = VBoxContainer.new()
+	_trade_give_box.add_theme_constant_override("separation", 4)
+	left.add_child(_trade_give_box)
+
+	var arrow := _label("→", 18, UIPalette.MUTED, true)
+	arrow.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	cols.add_child(arrow)
+
+	var right := VBoxContainer.new()
+	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	right.add_theme_constant_override("separation", 4)
+	cols.add_child(right)
+	right.add_child(_label("换回", 12, UIPalette.MUTED, true))
+	_trade_take_box = VBoxContainer.new()
+	_trade_take_box.add_theme_constant_override("separation", 4)
+	right.add_child(_trade_take_box)
+
+	_trade_hint = _label("先在左侧选一个要付出的资源", 11, UIPalette.MUTED, false)
+	box.add_child(_trade_hint)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	box.add_child(row)
+
+	var cancel := _button("取消")
+	cancel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cancel.pressed.connect(close_trade_dialog)
+	row.add_child(cancel)
+
+	_trade_ok = _button("确定", true)
+	_trade_ok.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_trade_ok.disabled = true
+	_trade_ok.pressed.connect(_confirm_trade)
+	row.add_child(_trade_ok)
+
+## 每次打开都重建两侧列表：比例和持有量是"打开那一刻"的快照
+func show_trade_dialog() -> void:
+	if _st == null:
+		return
+	_give_sel = -1
+	_take_sel = -1
+	_rebuild_trade_lists()
+	_trade_dlg.visible = true
+	_center_card(_trade_card, 470.0)
+
+func close_trade_dialog() -> void:
+	if _trade_dlg == null:
+		return
+	_trade_dlg.visible = false
+
+func _rebuild_trade_lists() -> void:
+	var p: PlayerState = _st.players[0]
+	for c in _trade_give_box.get_children():
 		c.queue_free()
+	for c in _trade_take_box.get_children():
+		c.queue_free()
+	_trade_give_btns.clear()
+	_trade_take_btns.clear()
+	# 上一次打开时的提示会残留（"确定后：付出…"），重置回初始引导语
+	_trade_hint.text = "先在左侧选一个要付出的资源"
 
-	# 每种"付出资源"只留最好的那一档
-	var seen := {}
-	for o in opts:
-		var give_r: int = o[0]
-		if seen.has(give_r):
-			continue
-		seen[give_r] = true
-		var ratio: int = o[2]
-		var take_r := _most_needed(p, give_r)
-		var b := _button("%d %s → %s" % [ratio, UIPalette.RES_SHORT[give_r], UIPalette.RES_SHORT[take_r]])
-		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		b.disabled = not can_act
-		b.tooltip_text = "用 %d 个%s 向银行换 1 个%s" % [ratio, UIPalette.RES_SHORT[give_r], UIPalette.RES_SHORT[take_r]]
-		b.pressed.connect(func(): bank_trade_pressed.emit(give_r, take_r))
-		_trade_grid.add_child(b)
-
-	if _trade_grid.get_child_count() == 0:
-		var hint := _label("（暂时没有可换的组合）", 11, UIPalette.MUTED, false)
-		_trade_grid.add_child(hint)
-
-func _most_needed(p: PlayerState, exclude: int) -> int:
-	var best := 0
-	var best_n := -1
 	for r in Res.R_COUNT:
-		if r == exclude:
-			continue
-		var need := 0
-		for cost in [Res.COST_CITY, Res.COST_SETTLEMENT, Res.COST_DEV]:
-			need = maxi(need, maxi(0, cost.get(r, 0) - p.resources[r]))
-		if need > best_n:
-			best_n = need
-			best = r
-	return best
+		var ratio := Rules.best_ratio_for(_st, 0, r)
+		var n: int = p.count(r)
+		var gb := _res_button("%s ×%d（持有 %d）" % [UIPalette.RES_SHORT[r], ratio, n])
+		gb.disabled = not _can_act or n < ratio
+		gb.tooltip_text = "付出 %d 个%s，从银行换回 1 个右侧任意资源" % [ratio, UIPalette.RES_SHORT[r]]
+		gb.pressed.connect(_on_give_clicked.bind(r))
+		_trade_give_box.add_child(gb)
+		_trade_give_btns.append(gb)
 
-## 发展卡按钮：只列可打出的（胜利点卡自动计分，不显示）
-func _refresh_dev(st: GameState, can_act: bool) -> void:
-	var p: PlayerState = st.players[0]
-	var playable := Rules.playable_dev_cards(p)
-	var sig := "%s|%s|%s" % [can_act, st.dev_played_this_turn, str(playable)]
+		var tb := _res_button("%s ×1" % UIPalette.RES_SHORT[r])
+		tb.tooltip_text = "换回 1 个%s（银行库存 %d）" % [UIPalette.RES_SHORT[r], _st.bank[r]]
+		tb.pressed.connect(_on_take_clicked.bind(r))
+		_trade_take_box.add_child(tb)
+		_trade_take_btns.append(tb)
+
+	_refresh_take_states()
+	_update_trade_ok()
+
+func _on_give_clicked(r: int) -> void:
+	_give_sel = r
+	# 付出的资源换了，之前选的"换回"多半不再有效（比如换回同种资源），清掉重选
+	_take_sel = -1
+	for i in Res.R_COUNT:
+		_style_res_button(_trade_give_btns[i], i == r)
+	var ratio := Rules.best_ratio_for(_st, 0, r)
+	_trade_hint.text = "付出 %d 个%s，再从右侧选一个换回的资源" % [ratio, UIPalette.RES_SHORT[r]]
+	_refresh_take_states()
+	_update_trade_ok()
+
+func _on_take_clicked(r: int) -> void:
+	_take_sel = r
+	var ratio := Rules.best_ratio_for(_st, 0, _give_sel)
+	_trade_hint.text = "确定后：付出 %d 个%s，换回 1 个%s" % [ratio, UIPalette.RES_SHORT[_give_sel], UIPalette.RES_SHORT[r]]
+	_refresh_take_states()
+	_update_trade_ok()
+
+## 右列可用性随左列选择变化：没选付出资源时全灰，
+## 选了之后排除同种资源 + 银行缺货的资源
+func _refresh_take_states() -> void:
+	for r in Res.R_COUNT:
+		var b: Button = _trade_take_btns[r]
+		var invalid: bool = r == _give_sel or _st.bank[r] <= 0
+		b.disabled = _give_sel < 0 or invalid
+		_style_res_button(b, r == _take_sel and not b.disabled)
+
+func _update_trade_ok() -> void:
+	_trade_ok.disabled = _give_sel < 0 or _take_sel < 0
+
+func _confirm_trade() -> void:
+	if _give_sel < 0 or _take_sel < 0 or _give_sel == _take_sel:
+		return
+	var g := _give_sel
+	var t := _take_sel
+	close_trade_dialog()
+	bank_trade_pressed.emit(g, t)
+
+## 资源选择按钮：选中 = 蓝框高亮，未选 = 普通浅灰，禁用 = 更淡的灰。
+## 选中态靠重设 stylebox 实现（Button 的 toggle_mode 语义是"按住开关"，
+## 和这里"单选高亮"不是一回事，自己管样式更直观）。
+func _res_button(text: String) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.add_theme_font_size_override("font_size", 12)
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	var fg := UIPalette.INK
+	b.add_theme_color_override("font_color", fg)
+	b.add_theme_color_override("font_hover_color", fg)
+	b.add_theme_color_override("font_pressed_color", Color(0.30, 0.30, 0.30))
+	b.add_theme_color_override("font_disabled_color", Color(0.68, 0.67, 0.65))
+	_style_res_button(b, false)
+	return b
+
+func _style_res_button(b: Button, selected: bool) -> void:
+	for state in ["normal", "hover", "pressed"]:
+		var sb := StyleBoxFlat.new()
+		if selected:
+			sb.bg_color = Color(0.851, 0.898, 0.969)
+			sb.border_color = UIPalette.PLAYER[0]
+			sb.set_border_width_all(2)
+		else:
+			match state:
+				"normal":
+					sb.bg_color = Color(0.945, 0.937, 0.910)
+					sb.border_color = Color(0.74, 0.72, 0.68)
+				"hover":
+					sb.bg_color = Color(0.878, 0.918, 0.973)
+					sb.border_color = Color(0.35, 0.55, 0.80)
+				_:
+					sb.bg_color = Color(0.792, 0.867, 0.949)
+					sb.border_color = Color(0.25, 0.45, 0.72)
+			sb.set_border_width_all(1)
+		sb.set_corner_radius_all(6)
+		sb.content_margin_left = 10
+		sb.content_margin_right = 10
+		sb.content_margin_top = 6
+		sb.content_margin_bottom = 6
+		b.add_theme_stylebox_override(state, sb)
+	# 禁用态单独盖一层更淡的样式（选中与否都一样，反正点不了）
+	var dsb := StyleBoxFlat.new()
+	dsb.bg_color = Color(0.929, 0.925, 0.914)
+	dsb.border_color = Color(0.855, 0.847, 0.827)
+	dsb.set_border_width_all(1)
+	dsb.set_corner_radius_all(6)
+	dsb.content_margin_left = 10
+	dsb.content_margin_right = 10
+	dsb.content_margin_top = 6
+	dsb.content_margin_bottom = 6
+	b.add_theme_stylebox_override("disabled", dsb)
+
+## 「打发展卡」按钮：本回合还没打过、且手上有能打的卡时才亮。
+## 掷骰前后都能点 —— 官方规则里骑士、修路、丰收、垄断都可以在掷骰前打出。
+func _refresh_dev_btn(st: GameState, can_act: bool) -> void:
+	var counts := _dev_counts(st.players[0])
+	var sig := "%s|%s|%s" % [can_act, st.dev_played_this_turn, str(counts)]
 	if sig == _dev_sig:
 		return
 	_dev_sig = sig
 
-	for c in _dev_grid.get_children():
-		c.queue_free()
+	var total := 0
+	for c in counts:
+		total += counts[c]
+	_btn_play.disabled = not can_act or st.dev_played_this_turn or total == 0
+	_btn_play.text = "打发展卡 %d" % total if total > 0 else "打发展卡"
+	_btn_play.tooltip_text = "本回合已打过 1 张，下回合才能再打" if st.dev_played_this_turn \
+		else "打出 1 张发展卡：掷骰前、掷骰后都可以，每回合限 1 张"
 
-	if playable.is_empty():
-		_dev_title.text = "发展卡（暂无）"
-		return
-	_dev_title.text = "发展卡（本回合还能打 1 张）" if not st.dev_played_this_turn else "发展卡（本回合已打过）"
-
-	for card in playable:
+## 手里能打的卡按类型计数。胜利点卡自动计分、不进列表；
+## 本回合刚买的卡在 fresh_dev_cards 里，playable_dev_cards 已经排除了。
+func _dev_counts(p: PlayerState) -> Dictionary:
+	var counts := {}
+	for card in Rules.playable_dev_cards(p):
 		if card == Res.Dev.VICTORY:
 			continue
-		var b := _button("打出：" + DEV_LABEL[card])
-		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		b.disabled = not can_act or st.dev_played_this_turn
-		b.pressed.connect(func(): play_dev_pressed.emit(card))
-		_dev_grid.add_child(b)
+		counts[card] = counts.get(card, 0) + 1
+	return counts
+
+# ================= 发展卡弹窗 =================
+
+## 三级弹窗：选卡 →（垄断 / 丰收）再选资源。
+##
+## 层级靠 add_child 顺序保证：mono / yop 建在 dev 之后，所以盖在上面。
+## 二级弹窗关闭时**一级保持可见**，取消就能退回上一步，
+## 不会出现"点了个取消结果整串流程消失"的迷惑。
+func _build_dev_dialogs() -> void:
+	_build_dev_dialog()
+	_build_mono_dialog()
+	_build_yop_dialog()
+
+## 浮层骨架：全屏遮罩 + 居中白卡片（与兑换弹窗同一套路）
+func _new_dialog(width: float) -> Dictionary:
+	var dlg := Control.new()
+	dlg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dlg.visible = false
+	dlg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(dlg)
+
+	var shade := ColorRect.new()
+	shade.color = Color(0, 0, 0, 0.34)
+	shade.set_anchors_preset(Control.PRESET_FULL_RECT)
+	shade.mouse_filter = Control.MOUSE_FILTER_STOP
+	dlg.add_child(shade)
+
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", _card_style())
+	card.custom_minimum_size = Vector2(width, 0)
+	card.mouse_filter = Control.MOUSE_FILTER_STOP
+	dlg.add_child(card)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 9)
+	card.add_child(box)
+	return {"dlg": dlg, "card": card, "box": box}
+
+## 弹窗底部的 取消 / 确定 一行。返回「确定」按钮（初始禁用，选好才亮）
+func _dialog_buttons(box: Node, cancel_cb: Callable, ok_cb: Callable) -> Button:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	box.add_child(row)
+	var cancel := _button("取消")
+	cancel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cancel.pressed.connect(cancel_cb)
+	row.add_child(cancel)
+	var ok := _button("确定", true)
+	ok.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ok.disabled = true
+	ok.pressed.connect(ok_cb)
+	row.add_child(ok)
+	return ok
+
+## 清空容器。用 remove_child + free 而不是 queue_free：
+## queue_free 要等到这一帧结束才生效，紧接着算卡片高度时
+## 那些"该删掉"的按钮还挂在树上，居中就会按旧高度算偏。
+func _clear_box(box: Node) -> void:
+	for c in box.get_children():
+		box.remove_child(c)
+		c.free()
+
+func _build_dev_dialog() -> void:
+	var d := _new_dialog(430.0)
+	_dev_dlg = d["dlg"]
+	_dev_card = d["card"]
+	var box: VBoxContainer = d["box"]
+
+	box.add_child(_label("打出发展卡", 15, UIPalette.INK, true))
+	var tip := _label("每回合最多打 1 张；本回合刚买的卡要到下回合才能打。", 11, UIPalette.MUTED, false)
+	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	tip.custom_minimum_size = Vector2(380, 0)
+	box.add_child(tip)
+
+	_dev_box = VBoxContainer.new()
+	_dev_box.add_theme_constant_override("separation", 4)
+	box.add_child(_dev_box)
+
+	# 选卡弹窗没有"确定"：点哪张就是打哪张（垄断 / 丰收会再开一级选资源）
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	box.add_child(row)
+	var cancel := _button("取消")
+	cancel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cancel.pressed.connect(close_dev_dialog)
+	row.add_child(cancel)
+
+func _build_mono_dialog() -> void:
+	var d := _new_dialog(400.0)
+	_mono_dlg = d["dlg"]
+	_mono_card = d["card"]
+	var box: VBoxContainer = d["box"]
+
+	box.add_child(_label("垄断：指定一种资源", 15, UIPalette.INK, true))
+	var tip := _label("收走所有对手手里的该资源，自己手里的不动。合计为 0 的选不了。", 11, UIPalette.MUTED, false)
+	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	tip.custom_minimum_size = Vector2(350, 0)
+	box.add_child(tip)
+
+	_mono_box = VBoxContainer.new()
+	_mono_box.add_theme_constant_override("separation", 4)
+	box.add_child(_mono_box)
+
+	_mono_hint = _label("选择要垄断的资源", 11, UIPalette.MUTED, false)
+	box.add_child(_mono_hint)
+	_mono_ok = _dialog_buttons(box, close_mono_dialog, _confirm_mono)
+
+func _build_yop_dialog() -> void:
+	var d := _new_dialog(470.0)
+	_yop_dlg = d["dlg"]
+	_yop_card = d["card"]
+	var box: VBoxContainer = d["box"]
+
+	box.add_child(_label("丰收年：拿 2 张资源", 15, UIPalette.INK, true))
+	var tip := _label("左右两列各选 1 张，可以选同一种（银行要有足够的存货）。", 11, UIPalette.MUTED, false)
+	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	tip.custom_minimum_size = Vector2(420, 0)
+	box.add_child(tip)
+
+	var cols := HBoxContainer.new()
+	cols.add_theme_constant_override("separation", 16)
+	box.add_child(cols)
+
+	var left := VBoxContainer.new()
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left.add_theme_constant_override("separation", 4)
+	cols.add_child(left)
+	left.add_child(_label("第 1 张", 12, UIPalette.MUTED, true))
+	_yop_left = VBoxContainer.new()
+	_yop_left.add_theme_constant_override("separation", 4)
+	left.add_child(_yop_left)
+
+	var plus := _label("+", 18, UIPalette.MUTED, true)
+	plus.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	cols.add_child(plus)
+
+	var right := VBoxContainer.new()
+	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	right.add_theme_constant_override("separation", 4)
+	cols.add_child(right)
+	right.add_child(_label("第 2 张", 12, UIPalette.MUTED, true))
+	_yop_right = VBoxContainer.new()
+	_yop_right.add_theme_constant_override("separation", 4)
+	right.add_child(_yop_right)
+
+	_yop_hint = _label("两列各选 1 张", 11, UIPalette.MUTED, false)
+	box.add_child(_yop_hint)
+	_yop_ok = _dialog_buttons(box, close_yop_dialog, _confirm_yop)
+
+# ---------------- 选卡弹窗 ----------------
+
+func show_dev_dialog() -> void:
+	if _st == null:
+		return
+	_rebuild_dev_list()
+	_dev_dlg.visible = true
+	_center_card(_dev_card, 430.0)
+
+func close_dev_dialog() -> void:
+	if _dev_dlg == null:
+		return
+	_dev_dlg.visible = false
+
+func _rebuild_dev_list() -> void:
+	_clear_box(_dev_box)
+	var counts := _dev_counts(_st.players[0])
+	# 固定顺序，别让列表顺序随手牌顺序跳动
+	for card in [Res.Dev.KNIGHT, Res.Dev.ROAD_BUILDING, Res.Dev.YEAR_OF_PLENTY, Res.Dev.MONOPOLY]:
+		if not counts.has(card):
+			continue
+		var b := _res_button("%s ×%d" % [DEV_LABEL[card], counts[card]])
+		b.disabled = not _can_act or _st.dev_played_this_turn
+		b.tooltip_text = DEV_TIP[card]
+		b.pressed.connect(_on_dev_card_clicked.bind(card))
+		_dev_box.add_child(b)
+
+	if _dev_box.get_child_count() == 0:
+		_dev_box.add_child(_label("（暂时没有可打出的卡）", 11, UIPalette.MUTED, false))
+	elif _st.dev_played_this_turn:
+		_dev_box.add_child(_label("本回合已经打过 1 张了，下回合再来", 11, UIPalette.MUTED, false))
+
+func _on_dev_card_clicked(card: int) -> void:
+	match card:
+		Res.Dev.MONOPOLY:
+			show_mono_dialog()
+		Res.Dev.YEAR_OF_PLENTY:
+			show_yop_dialog()
+		_:
+			# 骑士 / 修路：没有参数，直接打出
+			close_dev_dialog()
+			play_dev_pressed.emit(card, -1, -1, -1)
+
+# ---------------- 垄断：单列选 1 种资源 ----------------
+
+func show_mono_dialog() -> void:
+	if _st == null:
+		return
+	_mono_sel = -1
+	_rebuild_mono_list()
+	_mono_dlg.visible = true
+	_center_card(_mono_card, 400.0)
+
+func close_mono_dialog() -> void:
+	if _mono_dlg == null:
+		return
+	_mono_dlg.visible = false
+
+func _rebuild_mono_list() -> void:
+	_clear_box(_mono_box)
+	_mono_btns.clear()
+	_mono_hint.text = "选择要垄断的资源"
+
+	for r in Res.R_COUNT:
+		# 收的是对手手里的牌，自己手里的不算
+		var n := Rules.monopoly_yield(_st, 0, r)
+		var b := _res_button("%s ×%d" % [UIPalette.RES_SHORT[r], n])
+		b.disabled = not _can_act or n <= 0
+		b.tooltip_text = "%s：%s" % [UIPalette.RES_SHORT[r], Rules.monopoly_breakdown(_st, 0, r)]
+		b.pressed.connect(_on_mono_clicked.bind(r))
+		_mono_box.add_child(b)
+		_mono_btns.append(b)
+	_mono_ok.disabled = true
+
+func _on_mono_clicked(r: int) -> void:
+	_mono_sel = r
+	for i in Res.R_COUNT:
+		_style_res_button(_mono_btns[i], i == r)
+	_mono_hint.text = "确定后：收走全场 %d 张%s" % [Rules.monopoly_yield(_st, 0, r), UIPalette.RES_SHORT[r]]
+	_mono_ok.disabled = false
+
+func _confirm_mono() -> void:
+	if _mono_sel < 0:
+		return
+	var r := _mono_sel
+	close_mono_dialog()
+	close_dev_dialog()
+	play_dev_pressed.emit(Res.Dev.MONOPOLY, r, -1, -1)
+
+# ---------------- 丰收年：两列各选 1 张（可相同） ----------------
+
+func show_yop_dialog() -> void:
+	if _st == null:
+		return
+	_yop_sel = [-1, -1]
+	_rebuild_yop_lists()
+	_yop_dlg.visible = true
+	_center_card(_yop_card, 470.0)
+
+func close_yop_dialog() -> void:
+	if _yop_dlg == null:
+		return
+	_yop_dlg.visible = false
+
+func _rebuild_yop_lists() -> void:
+	_clear_box(_yop_left)
+	_clear_box(_yop_right)
+	_yop_btns = [[], []]
+	_yop_hint.text = "两列各选 1 张，可以选同一种"
+
+	for r in Res.R_COUNT:
+		for col in 2:
+			var b := _res_button("%s ×1" % UIPalette.RES_SHORT[r])
+			b.tooltip_text = "拿 1 张%s（银行库存 %d）" % [UIPalette.RES_SHORT[r], _st.bank[r]]
+			b.pressed.connect(_on_yop_clicked.bind(col, r))
+			(_yop_left if col == 0 else _yop_right).add_child(b)
+			_yop_btns[col].append(b)
+	_refresh_yop_states()
+	_yop_ok.disabled = true
+
+func _on_yop_clicked(col: int, r: int) -> void:
+	_yop_sel[col] = r
+	_refresh_yop_states()
+	_yop_ok.disabled = _yop_sel[0] < 0 or _yop_sel[1] < 0
+	if _yop_ok.disabled:
+		_yop_hint.text = "还要再选第 %d 张" % (2 if _yop_sel[0] >= 0 else 1)
+	else:
+		_yop_hint.text = "确定后：拿走 %s、%s" % [
+			UIPalette.RES_SHORT[_yop_sel[0]], UIPalette.RES_SHORT[_yop_sel[1]]]
+
+## 两列的可用性互相牵连：两列选同一种时，那种资源银行得有 2 张才发得出来，
+## 否则第二张会静默发不出（bank_take 取空）—— 所以直接在 UI 上禁掉。
+func _refresh_yop_states() -> void:
+	for col in 2:
+		for r in Res.R_COUNT:
+			var b: Button = _yop_btns[col][r]
+			var need := 2 if r == _yop_sel[1 - col] else 1
+			b.disabled = not _can_act or _st.bank[r] < need
+			_style_res_button(b, r == _yop_sel[col] and not b.disabled)
+
+func _confirm_yop() -> void:
+	if _yop_sel[0] < 0 or _yop_sel[1] < 0:
+		return
+	var r1: int = _yop_sel[0]
+	var r2: int = _yop_sel[1]
+	close_yop_dialog()
+	close_dev_dialog()
+	play_dev_pressed.emit(Res.Dev.YEAR_OF_PLENTY, -1, r1, r2)
 
 # ================= 控件工厂 =================
 
@@ -636,9 +1230,9 @@ func _button(text: String, primary: bool = false) -> Button:
 					sb.border_color = Color(0.855, 0.847, 0.827)
 		sb.set_border_width_all(1)
 		sb.set_corner_radius_all(6)
-		sb.content_margin_left = 8
-		sb.content_margin_right = 8
-		sb.content_margin_top = 5
-		sb.content_margin_bottom = 5
+		sb.content_margin_left = 10
+		sb.content_margin_right = 10
+		sb.content_margin_top = 6
+		sb.content_margin_bottom = 6
 		b.add_theme_stylebox_override(state, sb)
 	return b

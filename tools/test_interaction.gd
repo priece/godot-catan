@@ -22,6 +22,13 @@ var turn_shot_taken := false
 var done := false
 var shot_path := ""
 
+## 掷骰前窗口（HUMAN_PREROLL）的统计
+var preroll_turns := 0        ## 出现次数
+var preroll_dev := 0          ## 在其中打出的发展卡数
+var preroll_knight := 0       ## 其中打出骑士的次数
+var preroll_robber := 0       ## 掷骰前打骑士后放强盗的次数
+var dice_ok := true           ## 主阶段时骰子必须已经掷过
+
 func _initialize() -> void:
 	var args := OS.get_cmdline_user_args()
 	if args.size() > 0:
@@ -116,9 +123,20 @@ func _human_step() -> void:
 			var hs := ctl.valid_robber_hexes()
 			if hs.is_empty():
 				return
+			# 没掷骰就要放强盗 = 掷骰前打了骑士。放完必须回到掷骰前继续掷，
+			# 这条路走不通的话本回合骰子就永远掷不出来。
+			if not ctl.st.dice_rolled:
+				preroll_robber += 1
 			board.hex_clicked.emit(hs[0])
 			clicks += 1
+		GameDirector.S.HUMAN_PREROLL:
+			# 掷骰前的窗口：抢先打 1 张发展卡（顺便覆盖这条新链路），
+			# 没卡可打或已经打过就直接掷骰 —— 少了这一步人类回合会永远停在这里。
+			_preroll_step()
 		GameDirector.S.HUMAN_TURN:
+			# 能进主阶段就说明骰子已经掷过了 —— 掷骰前的窗口不允许建造
+			if not ctl.st.dice_rolled:
+				dice_ok = false
 			if not invalid_tested:
 				_test_invalid_click()
 				return
@@ -130,6 +148,56 @@ func _human_step() -> void:
 			_try_human_build()
 		_:
 			pass
+
+## 掷骰前窗口：能打就打 1 张，不能打就掷骰。
+## 每回合最多 1 张由 dev_played_this_turn 兜住，所以不会陷入死循环。
+func _preroll_step() -> void:
+	var ctl := director.ctl
+	var st := ctl.st
+	preroll_turns += 1
+	if not st.dev_played_this_turn:
+		for card in Rules.playable_dev_cards(st.players[0]):
+			if card == Res.Dev.VICTORY:
+				continue
+			preroll_dev += 1
+			if card == Res.Dev.KNIGHT:
+				preroll_knight += 1
+			match card:
+				Res.Dev.MONOPOLY:
+					hud.play_dev_pressed.emit(card, _best_monopoly(), -1, -1)
+				Res.Dev.YEAR_OF_PLENTY:
+					# 挑一种银行里至少有 2 张的资源，两列都选它 ——
+					# 顺便验证"丰收年两列可选同一种"这条规则
+					var r := _bank_rich(2)
+					if r < 0:
+						break
+					hud.play_dev_pressed.emit(card, -1, r, r)
+				_:
+					hud.play_dev_pressed.emit(card, -1, -1, -1)
+			clicks += 1
+			return
+	hud.roll_dice_pressed.emit()
+	clicks += 1
+
+## 垄断收得最多的那种资源
+func _best_monopoly() -> int:
+	var st := director.ctl.st
+	var best_r := 0
+	var best_n := -1
+	for r in Res.R_COUNT:
+		var n := Rules.monopoly_yield(st, 0, r)
+		if n > best_n:
+			best_n = n
+			best_r = r
+	return best_r
+
+## 银行里还剩至少 need 张的资源，找不到返回 -1
+func _bank_rich(need: int) -> int:
+	var st := director.ctl.st
+	for r in Res.R_COUNT:
+		if st.bank[r] >= need:
+			return r
+	return -1
 
 ## 验证"点了不该点的地方"不会生效、也不会崩
 func _test_invalid_click() -> void:
@@ -233,6 +301,12 @@ func _finish() -> void:
 	print("========================================")
 	print("模拟点击次数   : %d" % clicks)
 	print("人类成功建造次数: %d" % human_builds)
+	print("掷骰前窗口     : 出现 %d 次 · 打出发展卡 %d 次（骑士 %d 次，其后放强盗 %d 次）"
+		% [preroll_turns, preroll_dev, preroll_knight, preroll_robber])
+	if not dice_ok:
+		print("!! 出现未掷骰就进入主阶段的回合")
+	if preroll_knight > 0 and preroll_robber < preroll_knight:
+		print("!! 掷骰前打出的骑士没能走完放强盗流程")
 	print("帧数 / 轮数    : %d / %d" % [frames, st.round])
 	print("强盗最终位置   : 地块 %d（初始在 %d）" % [st.board.robber_hex, _desert_hex()])
 	if st.winner >= 0:
@@ -249,7 +323,8 @@ func _finish() -> void:
 		if total != 19:
 			errs.append("资源不守恒：%s 共 %d 张（应 19）" % [Res.R_NAMES_CN[r], total])
 
-	var ok := errs.is_empty() and st.winner >= 0 and human_builds > 0
+	var ok := errs.is_empty() and st.winner >= 0 and human_builds > 0 and dice_ok \
+		and preroll_robber >= preroll_knight
 
 	# 日志必须是全量的：最早那条（"新开一局…"）不能被截掉
 	var log_text: String = hud._log.text

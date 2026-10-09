@@ -44,6 +44,8 @@ $GODOT --headless --path . --import
 ```bash
 $GODOT --headless --path . --script res://tools/verify_topology.gd    # 19/54/72 geometry assertions
 $GODOT --headless --path . --script res://tools/test_rules.gd         # 46 rule unit tests
+$GODOT --headless --path . --script res://tools/test_trade_dialog.gd  # 24 bank-trade-dialog unit tests
+$GODOT --headless --path . --script res://tools/test_dev_dialog.gd    # 56 dev-card/turn-split unit tests
 $GODOT --headless --path . --script res://tools/test_seed.gd          # seed parsing + official number rules
 $GODOT --headless --path . --script res://tools/sim_runner.gd -- 500  # 500-game batch, prints win-rate matrix
 ```
@@ -59,6 +61,8 @@ These drive the real renderer and will hang (and be killed with exit code 137) u
 ```bash
 $GODOT --path . --resolution 1280x720 --script res://tools/screenshot.gd -- res://scenes/main.tscn /tmp/board.png 30 auto
 $GODOT --path . --resolution 1280x720 --script res://tools/shot_dialog.gd
+$GODOT --path . --resolution 1280x720 --script res://tools/shot_trade_dialog.gd
+$GODOT --path . --resolution 1280x720 --script res://tools/shot_dev_dialog.gd
 $GODOT --path . --resolution 1280x720 --script res://tools/test_interaction.gd -- 6000
 ```
 
@@ -81,9 +85,12 @@ These are load-bearing. Breaking them breaks the project's whole reason for exis
    means adding an `AIController` subclass — it must not require touching the dispatch code.
 3. **All legality checks live in `core/rules.gd` and must be pure functions** (no state mutation),
    so AI can run hypothetical lines of play.
-4. **`GameController` is step-drivable**: `setup_*` / `begin_turn` / `apply_action` / `finish_turn` /
-   `advance_player`. The unattended `run()` loop is built on this same API, so the interactive game and
-   the batch harness always share one code path. Never write a second implementation for tests.
+4. **`GameController` is step-drivable**: `setup_*` / `start_turn` + `roll_dice` (or the combined
+   `begin_turn`) / `apply_action` / `finish_turn` / `advance_player`. The unattended `run()` loop is
+   built on this same API, so the interactive game and the batch harness always share one code path.
+   Never write a second implementation for tests. ⚠️ `begin_turn` must equal `start_turn` +
+   `roll_dice` **including RNG call order** — `test_dev_dialog.gd` asserts the dice sequences match;
+   if they diverge, `sim_runner` win rates silently change meaning.
 5. **`GameDirector` only decides "whose turn and what interaction is needed"** — it makes no rule
    judgments. Human clicks call `apply_action()` directly, bypassing `IntentProvider`.
 6. **The HUD is dumb**: it displays state and emits signals; every decision lives in `GameDirector`.
@@ -215,6 +222,8 @@ Before considering a change complete, run these and make sure they are green:
 |---|---|
 | `verify_topology.gd` | `TOPOLOGY OK` |
 | `test_rules.gd` | `通过 46 · 失败 0` / PASS |
+| `test_trade_dialog.gd` | `通过 24 · 失败 0` / PASS |
+| `test_dev_dialog.gd` | `通过 56 · 失败 0` / PASS（含 begin_turn 与 start_turn+roll_dice 骰子序列一致） |
 | `test_seed.gd` | all checks pass |
 | `sim_runner.gd -- 30` | `不变量：棋盘异常 0 · 资源守恒破坏 0 · 状态完整性破坏 0` and `M1 验收结果：PASS` |
 | `test_interaction.gd -- 6000` | `M2 验收结果：PASS` |

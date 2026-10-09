@@ -15,7 +15,8 @@ extends SceneTree
 ##
 ## 会把图写到 /tmp/ 下面，并在日志里打印关键状态。
 
-const OUT := "/tmp/dlg"
+## 图写到 user://（跨平台），日志里会打印实际绝对路径。
+const OUT := "user://dlg"
 
 var _scene: Node
 var _step := 0
@@ -187,7 +188,7 @@ func _snap(path: String) -> void:
 	var err := img.save_png(path)
 	if err == OK:
 		_shots.append(path)
-		print(">> 已保存 %s" % path)
+		print(">> 已保存 %s（实际位置 %s）" % [path, ProjectSettings.globalize_path(path)])
 	else:
 		print("!! 保存失败 %s err=%d" % [path, err])
 

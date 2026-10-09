@@ -150,19 +150,36 @@ func run_setup() -> void:
 # ================= 回合 =================
 
 ## 开始当前玩家的回合：重置标记 + 掷骰 + 产出（或触发强盗）
+##
+## ⚠️ 拆成了 start_turn / roll_dice 两步，是为了给人类留出"掷骰前打骑士"的
+## 时机（官方规则）。AI 与无头批量对局仍走合体的 begin_turn ——
+## **RNG 调用顺序必须与拆分前一字不差**，否则 sim_runner 的胜率矩阵会对不上。
 func begin_turn(pid: int = -1) -> void:
+	if pid < 0:
+		pid = st.current
+	start_turn(pid)
+	roll_dice(pid)
+
+## 回合起点：只做重置，不掷骰。人类回合可以停在这里打发展卡。
+func start_turn(pid: int = -1) -> void:
 	if pid < 0:
 		pid = st.current
 	st.current = pid
 	st.dev_played_this_turn = false
 	st.free_roads_remaining = 0
 	st.turn_actions_done = 0
+	st.dice_rolled = false
 
 	providers[pid].on_turn_start(st)
 
+## 掷骰并结算产出 / 7 的强盗。与 start_turn 分开调用时，中间允许打发展卡。
+func roll_dice(pid: int = -1) -> void:
+	if pid < 0:
+		pid = st.current
 	var d1 := st.rng.randi_range(1, 6)
 	var d2 := st.rng.randi_range(1, 6)
 	st.dice = d1 + d2
+	st.dice_rolled = true
 	# 用【名字】开头，让"每个玩家的回合从哪开始"一眼可见 —— 掷骰是每回合第一件事，
 	# 拿它当回合分隔比再插一条横线更省地方，也不会把日志撑得太空。
 	st.log_line("【%s】掷出 %d（%d+%d）" % [_pn(pid), st.dice, d1, d2])
