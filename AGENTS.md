@@ -73,6 +73,19 @@ $GODOT --path . --resolution 1280x720 --script res://tools/test_interaction.gd -
 
 ---
 
+## Git / GitHub
+
+`origin` lives on GitHub and this network cannot reach it directly, so **before any
+`git clone` / `git fetch` / `git push` follow `docs.local/rule-proxy-ym.md`** (proxy setup,
+incl. which proxy is the one for git). Symptom if you skip it: the command hangs with no
+output, or dies with `Recv failure: Connection was reset`.
+
+> `docs.local/` is git-ignored and stays local, so that file will **not** exist after a
+> fresh clone — ask a teammate for it. Never copy its contents (internal addresses) into
+> tracked files such as this one.
+
+---
+
 ## Architecture contract
 
 These are load-bearing. Breaking them breaks the project's whole reason for existing
