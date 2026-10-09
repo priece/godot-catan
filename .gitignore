@@ -5,6 +5,10 @@
 export.cfg
 # 可能含 Android 签名口令 / 商店密钥，官方模板也建议忽略
 export_presets.cfg
+# Android 构建模板（编辑器里「Install Android Build Template」生成）：
+# 含 1GB 级 Gradle 中间产物，且每台机器按引擎版本重建，不入库。
+# 若要随仓库分发改动过的模板，就在需要的子目录上加 ! 例外。
+android/
 *.translation
 .mono/
 data_*/

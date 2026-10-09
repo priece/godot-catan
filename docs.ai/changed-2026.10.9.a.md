@@ -113,7 +113,7 @@ $g.FillEllipse($brush, $off, $off, $safe, $safe)   # safe=288, off=72
 3. **`splash_screen/background_color` 的默认 `Color(0,0,0,1)` 是"未设置"哨兵**。`_fix_themes_xml()` 里 `if (color == Color())` 走 `@mipmap/icon_background`，否则才用你给的颜色。**想真正指定背景色必须写一个非纯黑值**。
 4. **`splash_screen/icon` 的回落链**在 `load_icon_refs()` 里：用户指定 → adaptive foreground → 主图标 → 项目 `config/icon`。留空不等于"没有开屏图标"，而是回落到 App 图标。
 5. **PowerShell GDI+ 的 `Matrix.Translate(..., Prepend)` 乘法顺序与直觉相反**。第一版写 `Scale()` 后再 `Translate(Prepend)`，实际得到 `M = S×T`，纹理被平移了 41.5px，导致圆右侧被切平（探针 `y=216` 轮廓为 `[72..329]`，应为 `[72..360]`）。改成**显式构造矩阵** `Matrix(sx,0,0,sy,off,off)` 后恢复对称圆形。
-6. **`android/build/` 下 1GB 的内容大部分是被忽略的**：`.gitignore` 的 `build/`（任意层级）已覆盖 `android/build/build/` 的 854MB 构建中间产物。整个 `android/` 里真正未被忽略的只有 `android/.build_version` 一个文件。
+6. **`android/build/` 下 1GB 的内容大部分是被忽略的**：`.gitignore` 的 `build/`（任意层级）已覆盖 `android/build/build/` 的 854MB 构建中间产物。整个 `android/` 里真正未被忽略的只有 `android/.build_version` 一个文件——这就是 `git status` 里那个 `?? android/` 的来源。**已通过整目录忽略处理，见第七章第 2 条。**
 
 ---
 
@@ -134,6 +134,6 @@ $g.FillEllipse($brush, $off, $off, $safe, $safe)   # safe=288, off=72
 ## 七、遗留 / 待办
 
 1. **确认 `export_presets.cfg` 里第四章那两项已填**。该文件不入库，无法通过 git 追溯，只能靠本机确认。
-2. **`android/.build_version` 目前是未跟踪状态**（`?? android/` 就是它撑起来的）。建议把 `android/` 整体加进 `.gitignore`，否则以后误用 `git add -A` 有把 213MB 的构建模板塞进仓库的风险。
+2. ~~`android/` 未跟踪~~ **已处理**：`.gitignore` 在 Godot 段新增 `android/`（附原因注释），整棵 `android/` 连同 `android/.build_version` 一并忽略，`git status` 已干净。验证：`git check-ignore -v -- android android/.build_version android/build/res` 三行均命中 `.gitignore:11:android/`。这样也避免了以后误用 `git add -A` 把 213MB 构建模板塞进仓库。
 3. **`launcher_icons/*` 仍为空**：App 图标继续回落到 `icon.png`。若想让桌面图标也走"安全区"样式，需要另出一套 192×192 主图标 + 432×432 自适应前景/背景。
 4. **真机验证**：若圆外仍被切，把生成脚本的安全区系数从 `2/3` 调到 `0.6` 重新生成即可。
