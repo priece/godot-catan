@@ -618,7 +618,7 @@ M2 验收结果：PASS
 
 ```
 assets/terrain/       512×512，游戏实际使用（由原图 sips 重采样而来）
-assets/terrain_src/   1536~2048 原图，带 .gdignore，Godot 不会导入
+assets/resource.src/  1536~2048 原图（所有原图统一放这里），带 .gdignore，Godot 不会导入
 ```
 
 **为什么不给原图加透明通道**：素材是带白边的圆角方形插画（角落还有 AI 水印），

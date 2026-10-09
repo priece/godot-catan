@@ -161,7 +161,7 @@ game/     game_director.gd（回合与交互调度）· intent_provider.gd · hu
 ui/       board_view.gd（_draw 手绘棋盘）· hud.gd（全代码搭建的面板）· palette.gd
 scenes/   main.tscn
 tools/    8 个命令行脚本：测试、批量对局、截图
-assets/   terrain/（游戏用的缩略图）· terrain_src/（原图，不让 Godot 导入）
+assets/   terrain/（游戏用的缩略图）· resource.src/（原图，不让 Godot 导入）
 docs/     预览图与对局截图
 ```
 

@@ -16,6 +16,7 @@
 | 改逻辑 | 跑 headless 单测（见 §4 验收基线） |
 | 改 UI 排版 | 必须**真渲染截图**看一眼，headless 验不出排版 |
 | 截图类脚本 | **不能加 `--headless`**，且分辨率必须 `--resolution 1280x720` |
+| 安卓导出 | Android 构建模板在 `android/build/`；**发行包与 Maven 仓库都要换国内镜像，重装模板会覆盖**（见 §9） |
 
 ---
 
@@ -252,7 +253,222 @@ var r1: int = sel[0]         # ✓ 显式标类型
 
 ---
 
+## 九、Android 导出（本机 Windows）
+
+### 9.1 环境（本机已配好）
+
+| 项 | 值 |
+|---|---|
+| Java SDK 路径 | `F:/android/AndroidStudio/jbr`（Android Studio 自带 JBR） |
+| Android SDK 路径 | `F:\android\sdk`；用户环境变量 `ANDROID_HOME` 也指向同一处 |
+| **Gradle 用户目录** | 用户环境变量 `GRADLE_USER_HOME=F:\android\.gradle` —— 缓存 / daemon / wrapper 全在 F 盘，**不在 `C:\Users\<你>\.gradle`**。查"依赖到底下没下下来"必须去 F 盘看 |
+| 调试密钥库 | `C:\Users\<你>\.android\debug.keystore` 已生成，口令与用户名 `androiddebugkey` 均为默认值 |
+| scrcpy | 可留空，只影响一键部署时的投屏预览，不装也能部署 |
+
+设置入口：`编辑器 → 编辑器设置 → 导出 → Android`。另需 `编辑器 → 管理导出模板` 装好与引擎同版本的导出模板。
+
+> ⚠️ 因为 `GRADLE_USER_HOME` 被改到了 F 盘，`C:\Users\<你>\.gradle\gradle.properties`（里面写着 `org.gradle.java.home`）**根本不生效**——Gradle 只读 `$GRADLE_USER_HOME/gradle.properties`。本次构建实际用的是 `JAVA_HOME=D:\java\jdk-21.0.3`；JDK 21 满足 `config.gradle` 要求的 ≥17，所以没出问题。
+
+### 9.2 网络：发行包与依赖仓库都换国内镜像
+
+Android 构建模板在 `android/build/`，由编辑器 `项目 → 安装 Android 构建模板` 生成（`.gitignore` 里的 `build/` 规则已把它整个排除在版本库外）。
+
+**本机实测（2026-10-09）**：
+
+| 地址 | 结果 |
+|---|---|
+| `dl.google.com` / `maven.google.com` | **超时**，12s 无响应 |
+| `repo1.maven.org` | 200 |
+| `maven.aliyun.com/repository/google` | 200，0.2s |
+
+本机曾配过代理 `127.0.0.1:17892`（在系统 Internet 设置里），但 `ProxyEnable=0` 且端口**没有监听**（代理客户端没开）。结论：**凡指向 Google 的地址都会失败**，所以下面两处都得换，只换一处没用。
+
+#### (1) Gradle 发行包
+
+`android/build/gradle/wrapper/gradle-wrapper.properties`：
+
+```properties
+# 原始 —— services.gradle.org 国内极慢且易断
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.11.1-bin.zip
+
+# 已改 —— 腾讯云镜像（实测 HTTP 200 / application/zip / 约 130MB）
+distributionUrl=https\://mirrors.cloud.tencent.com/gradle/gradle-8.11.1-bin.zip
+```
+
+1. **`https\://` 的转义不能丢**。`.properties` 里冒号必须转义，镜像地址同样写 `https\://mirrors...`，少一个反斜杠 Gradle 会解析错。
+2. **版本号必须与模板一致**。模板用 Gradle **8.11.1**，镜像文件名要跟着改；换版本时先查镜像目录里有没有对应文件，别硬指一个不存在的版本。
+3. 三处都会**被重装模板覆盖**（见本节末）。
+
+#### (2) Maven 依赖仓库
+
+`google()` / `mavenCentral()` 走的就是 `maven.google.com`，不可达就必然失败。模板里有两处要改：`settings.gradle` 的 `pluginManagement.repositories`（解析 AGP / Kotlin 插件）和 `build.gradle` 的 `allprojects.repositories`（解析 androidx 等依赖）。两处都换成同一组阿里云镜像：
+
+```groovy
+maven { url "https://maven.aliyun.com/repository/google" }        // ≈ google()
+maven { url "https://maven.aliyun.com/repository/public" }        // ≈ mavenCentral()
+maven { url "https://maven.aliyun.com/repository/gradle-plugin" } // ≈ gradlePluginPortal()
+```
+
+要点：
+
+1. **必须跟官方源等价替换，不能只加不删**。Gradle 按仓库顺序查找，若把镜像加在 `google()` 之后，前面那个不可达的源会先被访问并超时。
+2. **镜像确实覆盖了本项目所需的全部构件**（逐个验证过 200）：AGP 8.6.1、`kotlin-gradle-plugin` 2.1.21、`aapt2` 8.6.1-11315950、androidx 的 `fragment` 1.8.6 / `core-splashscreen` 1.0.1 / `documentfile` 1.1.0，以及插件标记 `com.android.application`、`org.jetbrains.kotlin.android`。
+3. `central.sonatype.com` 的快照仓库以及 `plugins.gradle.org/m2/` 本项目用不到，一并注释掉了；换到能访问 Google 的网络时把下面几行注释取消即可。
+
+#### (3) 重装模板会覆盖
+
+执行「安装 Android 构建模板」会把 `android/build/` 整个重刷，**本节所有修改（wrapper 镜像、两处仓库、9.3 的两项）都会丢失，需要照本文重贴一遍**。改完不必重新导入工程。若嫌麻烦，可改为在 `%GRADLE_USER_HOME%\init.gradle` 里全局重定向仓库——代价是不在仓库内、对全机所有 Gradle 工程生效。
+
+### 9.3 模板与本机现状的两处适配
+
+这两处是模板默认值与本机已装组件的差异，不改会直接失败或多刷警告。
+
+| 文件 | 模板默认 | 本机实际 | 改动 |
+|---|---|---|---|
+| `config.gradle` | `buildTools: '36.1.0'` | `F:\android\sdk\build-tools` 下只有 `34.0.0` / `36.0.0` | 改成 `'36.0.0'` |
+| `gradle.properties` | 无 | AGP 8.6.1 只测到 compileSdk 35，模板用 36 | 加 `android.suppressUnsupportedCompileSdk=36` |
+
+- **`buildTools` 那条是硬失败**：AGP 发现指定版本缺失会去 `dl.google.com` 自动下载，而它不可达 → `Failed to install build-tools;36.1.0`。改用已装的 36.0.0 即可，AGP 8.6.1 同样支持。（NDK `29.0.14206865` 与 platform `android-36` 本机都已装好，无需动。）
+- **`suppressUnsupportedCompileSdk` 纯属消噪**：日志里的 `This Android Gradle plugin (8.6.1) was tested up to compileSdk = 35` 只是"没测过"，不影响出包，加上这行就不再刷。
+
+#### 日志里其余的"红字"都是噪声，不用管
+
+| 日志 | 说明 |
+|---|---|
+| `android.overridePathCheck=true is experimental` | 路径含中文/非 ASCII 时的兼容开关，模板自带 |
+| `only understands SDK XML versions up to 3 but ... version 4` | `%USERPROFILE%\.android\cache` 里 `addons_list-6` 是新格式，AGP 读不懂会跳过 |
+
+### 9.4 导出 / 运行
+
+| 方式 | 做法 |
+|---|---|
+| 一键部署（推荐先试） | 手机开「开发者选项 → USB 调试」并连数据线，点编辑器右上角安卓图标，自动构建安装并运行 |
+| 命令行导出 | `$G --path $P --export-debug "<预设名>" catan.apk`，预设名须与 `export_presets.cfg` 里的名字一致（该文件已 gitignore） |
+| 装到手机 | `adb install catan.apk`（adb 在 `F:\android\sdk\platform-tools\`）；报 `INSTALL_PARSE_FAILED_NO_CERTIFICATES` 见 §9.6 |
+
+导出预设检查项：包名改成独特的（如 `com.mying.catan`）、屏幕方向选**横屏**（项目是 1280×720 横版）、架构保持默认 `arm64-v8a`。
+
+本项目无需为安卓改代码：已是 `gl_compatibility` 渲染器 + `canvas_items` 拉伸，触摸由 Godot 默认的「触摸模拟鼠标」转成 `InputEventMouseButton`，`board_view.gd` 的点击逻辑照常可用；HUD 上的 Esc/回车等键盘快捷在手机上无效，但都有对应按钮兜底。
+
+### 9.5 改完怎么验（实测记录）
+
+不必等 Godot 编辑器，直接在 `android/build/` 下跑 Gradle，就能独立复现并验证上述配置：
+
+```powershell
+cd E:\project_godot\godot-catan\android\build
+.\gradlew.bat help --console=plain                    # 只走到配置阶段：验 AGP / Kotlin 插件能否解析
+.\gradlew.bat assembleStandardDebug --console=plain   # 全量：验 androidx 依赖、aapt2，真出包
+```
+
+2026-10-09 实测：
+
+| 命令 | 结果 |
+|---|---|
+| `gradlew.bat help` | `BUILD SUCCESSFUL in 20s`；`dl.google.com` 超时与 SDK XML 报错均消失 |
+| `gradlew.bat assembleStandardDebug` | `BUILD SUCCESSFUL in 1m 56s`，34 tasks executed |
+| 产物 | `android/build/build/outputs/apk/standard/debug/android_debug.apk`，124.3 MB |
+
+两点提醒：
+
+- 这是**裸 Gradle 构建**，没有 Godot 传的 `export_*` 参数，用的是 `config.gradle` 默认值（包名 `com.godot.game`、4 个 ABI）。⚠️ **它没有签名，装不上**——`adb install` 会报 `INSTALL_PARSE_FAILED_NO_CERTIFICATES`（见 §9.6），它只能用来验依赖链路。
+- 缓存全在 `F:\android\.gradle`，一次全量构建会把 Gradle 发行包（130MB）+ AGP + Kotlin + aapt2 拉进去，首次以分钟计，之后走缓存很快。
+
+### 9.6 `adb install` 报错：未签名
+
+**症状**（本机实测，拿 §9.5 那个裸构建产物去装时）：
+
+```
+Performing Streamed Install
+adb: failed to install ...\android_debug.apk: Failure
+[INSTALL_PARSE_FAILED_NO_CERTIFICATES: Failed to collect certificates from
+/data/app/vmdl1943052862.tmp/base.apk: Attempt to get length of null array]
+```
+
+Android 7.0 起强制要求 APK 签名，没签就是这一条。**先别怀疑 USB / 驱动 / 包名**，直接验签名：
+
+```powershell
+$bt = 'F:\android\sdk\build-tools\36.0.0'
+& "$bt\apksigner.bat" verify --print-certs <你的.apk>
+# 未签名 → "DOES NOT VERIFY" + "ERROR: Missing META-INF/MANIFEST.MF"
+# 已签名 → "Signer #1 certificate DN: ..."
+```
+
+#### 根因只有一个：`shouldSign()` 返回了 false
+
+[config.gradle](file:///e:/project_godot/godot-catan/android/build/config.gradle) 的判断链：
+
+```groovy
+ext.shouldSign = { ->
+    String signFlag = project.hasProperty("perform_signing") ? project.property("perform_signing") : ""
+    if (signFlag == null || signFlag.isEmpty()) {
+        if (isAndroidStudio()) { signFlag = "true" } else { signFlag = "false" }
+    }
+    return Boolean.parseBoolean(signFlag)
+}
+// ...
+debug {
+    if (shouldSign()) { signingConfig signingConfigs.debug } else { signingConfig null }   // ← null 就是裸包
+}
+```
+
+即**只有**「传了 `-Pperform_signing=true`」或「从 Android Studio 里构建」这两条路。有两条常见触发路径：
+
+| # | 场景 | 为什么没签 |
+|---|---|---|
+| A | §9.5 的裸 `gradlew assembleStandardDebug` | 没传 `perform_signing`，也不是 Android Studio |
+| B | **从 Godot 编辑器导出**，但预设里 `package/signed=false` | Godot **只在 `package/signed=true` 时**才给 gradle 传 `-Pperform_signing=true` |
+
+⚠️ **B 才是最坑的**：`package/signed` 在**新建 Android 预设时默认就是 `false`** —— 所以"从编辑器导出"根本不等于"已签名"。本机实测第一次正式导出的 `Catan.apk` 就是未签名的，装上去报的错和 A 一模一样。（原先本文写的"从 Godot 导出，编辑器会自己带上签名参数"是错的，已更正。）
+
+#### 修法
+
+**修 B（推荐，一劳永逸）**：导出对话框 → Android 预设 → **包 → 勾选「签名 / Signed」**；或直接改 `export_presets.cfg`：
+
+```ini
+package/signed=true      # 模板默认是 false
+```
+
+2026-10-09 实测对照：
+
+| `package/signed` | `apksigner verify` |
+|---|---|
+| `false` | `DOES NOT VERIFY` / `Missing META-INF/MANIFEST.MF` |
+| `true` | `Signer #1: CN=Godot, OU=Godot Engine, O=Stichting Godot, C=NL` |
+
+> 用的是 Godot **自动生成**的调试密钥库（`%APPDATA%\Godot\keystores\debug.keystore`，来自编辑器设置 `export/android/debug_keystore`）——**不是**密钥库缺失，排查时别往那个方向找。该文件实测存在（2714 字节）。
+> `export_presets.cfg` 已 gitignore，改动只在本机生效；换机器或重建预设时要重勾一次。
+
+**修 A（命令行出包）**：把参数补上即可：
+
+```powershell
+.\gradlew.bat assembleStandardDebug -Pperform_signing=true -Pperform_zipalign=true `
+  -Pdebug_keystore_file="$env:USERPROFILE\.android\debug.keystore" `
+  -Pdebug_keystore_password=android -Pdebug_keystore_alias=androiddebugkey
+```
+
+**救急**：手头只有未签名产物时，用调试密钥库就地签一次（实测通过，装完能正常起局）。`INSTALL_PARSE_FAILED_NO_CERTIFICATES` 报的是**证书缺失**，与包内容无关——实测那个裸构建 APK 里 `libgodot_android.so`（4 个 ABI）、`assets.sparsepck`、`project.binary` 俱全，补个签名即可用：
+
+```powershell
+$bt = 'F:\android\sdk\build-tools\36.0.0'
+$ks = "$env:USERPROFILE\.android\debug.keystore"
+& "$bt\zipalign.exe" -p -f 4 in.apk aligned.apk
+& "$bt\apksigner.bat" sign --ks $ks --ks-pass pass:android --key-pass pass:android `
+    --ks-key-alias androiddebugkey --out signed.apk aligned.apk
+& "$bt\apksigner.bat" verify --print-certs signed.apk
+adb install -r signed.apk
+```
+
+调试密钥库的口令与别名都是 Android 默认值（`android` / `androiddebugkey`），与 §9.1 一致。
+
+> 顺带记一条：装完启动若看到 `E godot: shader failed to compile, unable to bind shader`（`shader_gles3.cpp`），本机实测**画面正常**，属启动阶段噪声，先不追。
+
+---
+
 ## 修订记录
 
+- v1.5（2026-10-09）：**更正 v1.4 的错误结论**——v1.4 把"从 Godot 导出"当作未签名的正解，实测这是错的。§9.6 重写为「根因只有一个：`shouldSign()` 返回 false」，并列出两条触发路径：A 裸 `assembleStandardDebug`（§9.5），B **从编辑器导出但预设 `package/signed=false`**——`package/signed` 新建预设时默认就是 `false`，所以"从编辑器导出"≠"已签名"，本机第一次正式导出的 `Catan.apk` 就是这样。补上 `shouldSign()` 源码片段 + `signingConfig null` 的落点、A/B 对照表、修法（勾选「签名」或改 `export_presets.cfg`）与改前/改后签名实测对照（`DOES NOT VERIFY` → `CN=Godot, ...`）；并明确排除"密钥库缺失"这个误判方向（`%APPDATA%\Godot\keystores\debug.keystore` 实测存在）。
+- v1.4（2026-10-09）：新增 §9.6「`adb install` 报错：未签名」。症状即 `INSTALL_PARSE_FAILED_NO_CERTIFICATES: Failed to collect certificates ... Attempt to get length of null array`；用 `apksigner verify --print-certs` 判定（未签名时是 `DOES NOT VERIFY` / `Missing META-INF/MANIFEST.MF`）；根因是 `config.gradle#shouldSign()` 只在 `perform_signing=true` 或 Android Studio 下才签，而 §9.5 的裸 `assembleStandardDebug` 两者都不满足——§9.5 那条"不签名"的提醒同时升级为带 ⚠️ 的显式警告。给了两条出路：从 Godot 导出（正解），或 `zipalign + apksigner` 就地补签 / 给 Gradle 补 `-Pperform_signing` 参数（救急），并注明该裸构建 APK 内容其实是完整的（4 ABI so + sparsepck + project.binary 俱全）。§9.4 的 `adb install` 行加交叉引用；另记一条启动期 `shader failed to compile` 噪声可忽略。
+- v1.3（2026-10-09）：Android 导出首次真实构建踩坑。§9.1 补 `GRADLE_USER_HOME=F:\android\.gradle`（缓存不在 C 盘；顺带记下 `C:\...\.gradle\gradle.properties` 因此失效）。**§9.2 由"只换发行包"扩为"发行包 + Maven 仓库都要换"**——本机 `dl.google.com` / `maven.google.com` 全超时（实测），需在 `settings.gradle` 与 `build.gradle` 两处用阿里云镜像**等价替换**（只加不删会先撞超时），并列出已逐个验证的构件清单。新增 §9.3：`buildTools` 36.1.0→36.0.0（缺失会触发 Google 下载，硬失败）、`android.suppressUnsupportedCompileSdk=36`（消噪），以及两条可忽略的噪声日志。新增 §9.5：`gradlew help` / `assembleStandardDebug` 的独立验证法 + 实测结果（20s / 1m56s / 124.3MB APK）。
+- v1.2（2026-10-09）：新增 §9「Android 导出」——本机 Java / Android SDK 路径与调试密钥库现状（§9.1）、`android/build/gradle/wrapper/gradle-wrapper.properties` 的 `distributionUrl` 从官方源换腾讯云镜像及三条注意：转义不能丢、版本号要跟模板、**重装构建模板会覆盖**（§9.2）、一键部署与命令行导出的对应命令（§9.3）。§1 结论表加一行安卓导出指引。
 - v1.1（2026-10-09）：补「发展卡交互改造」当天新增的三条坑——lambda 捕获 int 的 `+=` 不写回（§7.5）、无类型 Array 取元素必须显式标类型（§7.6）、弹窗列表重建用 `remove_child+free` 而非 `queue_free`（§7.7）；验收基线加 `test_dev_dialog.gd`（56 条）与 `shot_dev_dialog.gd`。
 - v1.0（2026-10-09）：初版。来源为当日「银行兑换弹窗化」全流程实录——exe 沙箱执行限制与 `_console.exe` 是启动器（§2）、PowerShell 工具不回显 stdout 且禁 cmd（§2.3）、headless 与渲染类的分界与 1280x720 约束（§4.2）、崩了不 `quit()` 导致挂起且日志缓冲丢失（§4.3）、`Array[int]` 赋值坑（§7.1）、`content_margin` 默认 0 导致内容贴边（§7.2）、隐藏 Control 尺寸与居中（§7.3）、UI 截图只挂 HUD（§7.4）。同日补：`shot_dialog.gd` 输出路径从 `/tmp/`（macOS）改为 `user://` 跨平台写法。

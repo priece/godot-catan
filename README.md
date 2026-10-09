@@ -169,7 +169,7 @@ game/     game_director.gd (turn/interaction orchestration) · intent_provider.g
 ui/       board_view.gd (_draw() board) · hud.gd (code-built panel) · palette.gd
 scenes/   main.tscn
 tools/    8 CLI scripts: tests, batch simulation, screenshots
-assets/   terrain/ (used) · terrain_src/ (originals, not imported)
+assets/   terrain/ (used) · resource.src/ (originals, not imported)
 docs/     preview and gameplay screenshots
 ```
 

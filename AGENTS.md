@@ -119,7 +119,7 @@ game/     game_director.gd (turn/interaction orchestration), intent_provider.gd,
 ui/       board_view.gd (_draw() board painting), hud.gd (right-hand panel, code-built), palette.gd
 scenes/   main.tscn — root Main → BoardView (Node2D), HUD (CanvasLayer), GameDirector (Node)
 tools/    8 CLI scripts: 4 headless-capable tests + 3 render-dependent + probe_seed.gd
-assets/   terrain/ (imported, downscaled) and terrain_src/ (originals, .gdignore'd)
+assets/   terrain/ (imported, downscaled) and resource.src/ (all originals, .gdignore'd)
 docs/     board_preview.png and gameplay screenshots
 DESIGN.md Full design document (Chinese) — the authoritative reference
 ```
@@ -141,8 +141,8 @@ DESIGN.md Full design document (Chinese) — the authoritative reference
   (line count + last line text) — comparing an array reference to itself always reports "unchanged".
 - **Restarting keeps the log** (`GameDirector._session_log`): it only ever grows.
 - **Tunables are `@export`** so they can be tweaked in the inspector (seed, zoom, origin, display flags).
-- **Artwork**: originals in `assets/<name>_src/` are read-only. Derived, downscaled copies go in
-  `assets/<name>/` for the game to use.
+- **Artwork**: all originals live in `assets/resource.src/` (read-only, `.gdignore`d so Godot never
+  imports them). Derived, downscaled copies go in `assets/<type>/` for the game to use.
 - **UI palette**: as of the current design, 4 player colors are blue/red/orange/green and names are
   `蓝方 / 小红 / 小橙 / 小绿`.
 

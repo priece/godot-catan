@@ -96,7 +96,7 @@ $GODOT --path . --resolution 1280x720 --script res://tools/screenshot.gd -- \
 资源：
 ```
 assets/terrain/       512×512 地形贴图（游戏用）
-assets/terrain_src/   原图 + .gdignore（Godot 不导入）
+assets/resource.src/  原图 + .gdignore（Godot 不导入）
 docs/*.png            各阶段实机截图
 ```
 
