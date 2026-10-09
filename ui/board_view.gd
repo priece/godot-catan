@@ -31,6 +31,10 @@ enum Pick { NONE, VERTEX, EDGE, HEX, ANY }
 ## 用真实贴图画地块。关掉就回退到纯色块（调试 / 贴图缺失时用）
 @export var use_terrain_textures: bool = true
 
+## 设计稿里棋盘刻意右移的量（DESIGN §16.5：给左上角图例腾地方）。
+## 保留它，才能让 16:9（视口 1280）下的落点仍是 (510, 360)，与旧版逐像素一致。
+const BOARD_X_BIAS := 62.0
+
 # ---------------- 外观常量 ----------------
 const COAST_BAND := 0.07
 const TOKEN_R := 0.355
@@ -97,6 +101,10 @@ func _ready() -> void:
 	_port_box.set_border_width_all(1)
 	_port_box.set_corner_radius_all(5)
 	_rebuild()
+	# 跟随视口重排棋盘：手机横屏比 16:9 更宽时，让棋盘在
+	# "视口扣掉右侧面板"的区域里居中，而不是死守设计稿坐标。
+	get_viewport().size_changed.connect(_fit_to_viewport)
+	_fit_to_viewport()
 
 ## 用一个带中文回退的系统字体，保证 _draw_string 里写中文也不会变豆腐块
 func _cjk_font() -> Font:
@@ -107,6 +115,13 @@ func _cjk_font() -> Font:
 
 func _rebuild() -> void:
 	board = Board.generate(seed_value, beginner_board)
+	queue_redraw()
+
+## 按当前视口重排棋盘：水平在"视口扣掉右侧信息面板"的区域里居中，
+## 垂直在视口中居中。1280×720 下结果为 (510, 360)，与旧版一致。
+func _fit_to_viewport() -> void:
+	var vp := get_viewport_rect().size
+	board_origin = Vector2((vp.x - HUD.PANEL_W) * 0.5 + BOARD_X_BIAS, vp.y * 0.5)
 	queue_redraw()
 
 # ================= 对外接口（GameDirector 调用）=================

@@ -22,9 +22,8 @@ signal roll_dice_pressed
 ## 其他字符串交给 GameDirector 解析（非法值它自己兜底）。
 signal restart_pressed(seed_text: String)
 
-const PANEL_X := 896.0
+## 面板宽度固定；x 位置不再写死，而是贴视口右缘（见 _apply_layout）。
 const PANEL_W := 384.0
-const VIEW_H := 720.0
 
 const DEV_LABEL := ["骑士", "胜利点", "修路", "丰收年", "垄断"]
 
@@ -77,6 +76,12 @@ var _take_sel := -1                ## 右列当前选中（-1 = 未选）
 var _st: GameState                 ## refresh() 时留存的最新局面，开弹窗时用
 var _can_act := false
 
+## 面板的三个根控件留引用，_apply_layout() 才能在视口尺寸变化时
+## （手机横屏比例比 16:9 更宽）把它们重新贴到真实右缘并拉伸高度。
+var _bg: ColorRect
+var _sep: ColorRect
+var _box: VBoxContainer
+
 ## 发展卡弹窗（三级）：
 ##   _dev_dlg  选卡 → 骑士/修路直接打出，垄断/丰收再开二级弹窗选资源
 ##   _mono_dlg 垄断：单列 5 项，显示对手合计 ×N
@@ -108,6 +113,10 @@ var _dev_sig := ""
 
 func _ready() -> void:
 	_build()
+	# 跟随视口尺寸：手机横屏比 16:9 更宽时，把面板钉在真实右缘，
+	# 而不是留在设计稿的 x=896 —— 否则右缘会露出一条海色。
+	get_viewport().size_changed.connect(_apply_layout)
+	_apply_layout()
 	_build_trade_dialog()
 	# 三个发展卡弹窗按"层级从下到上"的顺序建：后加的子节点盖在前面之上，
 	# 所以二级弹窗（垄断/丰收）要建在选卡弹窗之后。
@@ -369,23 +378,19 @@ func on_new_game(cur_seed: int) -> void:
 # ================= 构建 =================
 
 func _build() -> void:
-	var bg := ColorRect.new()
-	bg.color = Color(0.965, 0.961, 0.953)
-	bg.position = Vector2(PANEL_X, 0)
-	bg.size = Vector2(PANEL_W, VIEW_H)
-	add_child(bg)
+	_bg = ColorRect.new()
+	_bg.color = Color(0.965, 0.961, 0.953)
+	add_child(_bg)
 
-	var sep := ColorRect.new()
-	sep.color = Color(0.78, 0.77, 0.74)
-	sep.position = Vector2(PANEL_X, 0)
-	sep.size = Vector2(1.5, VIEW_H)
-	add_child(sep)
+	_sep = ColorRect.new()
+	_sep.color = Color(0.78, 0.77, 0.74)
+	add_child(_sep)
 
-	var box := VBoxContainer.new()
-	box.position = Vector2(PANEL_X + 14, 12)
-	box.size = Vector2(PANEL_W - 28, VIEW_H - 24)
-	box.add_theme_constant_override("separation", 7)
-	add_child(box)
+	_box = VBoxContainer.new()
+	_box.add_theme_constant_override("separation", 7)
+	add_child(_box)
+	# 位置/尺寸由 _apply_layout() 统一算；下面沿用局部名 box 继续挂子控件
+	var box := _box
 
 	# 标题行：左边标题，右边"重开一局"。放标题行是为了不占日志的竖向空间。
 	var title_row := HBoxContainer.new()
@@ -471,6 +476,20 @@ func _build() -> void:
 	lsb.content_margin_bottom = 6
 	_log.add_theme_stylebox_override("normal", lsb)
 	box.add_child(_log)
+
+## 把面板钉在视口右缘，并让它随视口高度伸缩。
+## 1280×720（设计分辨率）下与旧版绝对坐标逐像素一致；
+## 手机横屏更宽时多出来的宽度全部留在棋盘那侧、由海色填充，
+## 面板不会被甩在中间。
+func _apply_layout() -> void:
+	var vp := get_viewport().get_visible_rect().size
+	var x := vp.x - PANEL_W
+	_bg.position = Vector2(x, 0)
+	_bg.size = Vector2(PANEL_W, vp.y)
+	_sep.position = Vector2(x, 0)
+	_sep.size = Vector2(1.5, vp.y)
+	_box.position = Vector2(x + 14, 12)
+	_box.size = Vector2(PANEL_W - 28, vp.y - 24)
 
 func _make_player_row(pid: int) -> Control:
 	var frame := PanelContainer.new()
