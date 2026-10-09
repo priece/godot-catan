@@ -414,23 +414,23 @@ func _draw_ports() -> void:
 		var pos := _p(mid + mid.normalized() * PORT_OUT)
 		var ptype: int = board.vertex_port[e.x]
 
-		var w := px_per_unit * 0.54
-		var h := px_per_unit * 0.28
-		var rect := Rect2(pos - Vector2(w, h) * 0.5, Vector2(w, h))
-
-		var box := _port_box.duplicate() as StyleBoxFlat
 		var label := "3:1"
 		var ink := Color(0.10, 0.10, 0.10)
+		var box := _port_box.duplicate() as StyleBoxFlat
 		if ptype != Res.Port.GENERIC_3:
+			# 仅靠底色区分 2:1 港口的资源不明显，直接写明资源：木x2 : 1
+			label = "%sx2 : 1" % Res.R_NAMES_CN[ptype - 1].left(1)
 			var rc := _res_color(ptype - 1).darkened(0.35)
 			box.bg_color = rc
 			box.border_color = Color(1, 1, 1, 0.75)
-			label = "2:1"
 			ink = Color(1, 1, 1)
+		var fs := int(px_per_unit * 0.28 * 0.60)
+		var ts := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+		var h := px_per_unit * 0.28
+		var w := maxf(px_per_unit * 0.54, ts.x + h * 0.55)
+		var rect := Rect2(pos - Vector2(w, h) * 0.5, Vector2(w, h))
 		draw_style_box(box, rect)
 
-		var fs := int(h * 0.60)
-		var ts := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
 		draw_string(font, pos + Vector2(-ts.x * 0.5, fs * 0.34),
 			label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, ink)
 
