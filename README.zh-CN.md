@@ -160,7 +160,7 @@ ai/       ai_base.gd · evaluation.gd · ai_easy.gd · ai_medium.gd · ai_hard.g
 game/     game_director.gd（回合与交互调度）· intent_provider.gd · human_intent.gd
 ui/       board_view.gd（_draw 手绘棋盘）· hud.gd（全代码搭建的面板）· palette.gd
 scenes/   main.tscn
-tools/    8 个命令行脚本：测试、批量对局、截图
+tools/    13 个命令行脚本：测试、批量对局、截图
 assets/   terrain/（游戏用的缩略图）· resource.src/（原图，不让 Godot 导入）
 docs/     预览图与对局截图
 ```
@@ -172,9 +172,14 @@ docs/     预览图与对局截图
 | `verify_topology.gd` | 是 | 断言 19 地块 / 54 顶点 / 72 边及度数分布 |
 | `test_rules.gd` | 是 | 46 项规则单元测试 |
 | `test_seed.gd` | 是 | 种子解析 + 官方数字摆放规则 |
+| `test_pick.gd` | 是 | 触屏拾取：点在高亮顶点里绝不能触发修路 |
+| `test_trade_dialog.gd` | 是 | 银行兑换弹窗单元测试 |
+| `test_dev_dialog.gd` | 是 | 发展卡 / 回合拆分单元测试 |
 | `sim_runner.gd` | 是 | 批量对局、胜率矩阵、守恒不变量 |
 | `screenshot.gd` | **否** | 渲染棋盘到 PNG，含自检 |
 | `shot_dialog.gd` | **否** | 驱动重开面板并截图 |
+| `shot_trade_dialog.gd` | **否** | 截图银行兑换弹窗 |
+| `shot_dev_dialog.gd` | **否** | 截图发展卡弹窗 |
 | `test_interaction.gd` | **否** | 模拟人类点击打完整局（M2 验收） |
 
 ```bash
@@ -183,9 +188,10 @@ GODOT=/Applications/Godot.app/Contents/MacOS/Godot
 $GODOT --headless --path . --script res://tools/verify_topology.gd
 $GODOT --headless --path . --script res://tools/test_rules.gd
 $GODOT --headless --path . --script res://tools/test_seed.gd
+$GODOT --headless --path . --script res://tools/test_pick.gd
 $GODOT --headless --path . --script res://tools/sim_runner.gd -- 500
 
-# 以下三个**不能**加 --headless，且必须带 --resolution 1280x720
+# 以下几项**不能**加 --headless，且必须带 --resolution 1280x720
 $GODOT --path . --resolution 1280x720 --script res://tools/test_interaction.gd -- 6000
 $GODOT --path . --resolution 1280x720 --script res://tools/shot_dialog.gd
 $GODOT --path . --resolution 1280x720 --script res://tools/screenshot.gd -- \
@@ -195,7 +201,7 @@ $GODOT --path . --resolution 1280x720 --script res://tools/screenshot.gd -- \
 如果你是 AI 助手或新加入的贡献者，请先读 **[AGENTS.md](AGENTS.md)**（英文）——
 里面写了架构铁律、编码约定，以及一份**已经在本项目里真实踩过的 Godot 坑清单**
 （主题覆盖静默失效、程序化赋值不触发 `text_changed`、`--resolution` 不改视口、
-`--headless` 下 `frame_post_draw` 卡死等等）。
+`--headless` 下 `frame_post_draw` 卡死、触屏拾取按"谁近谁赢"导致想建村却修了路等等）。
 
 ---
 

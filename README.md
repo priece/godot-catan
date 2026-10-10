@@ -168,7 +168,7 @@ ai/       ai_base.gd · evaluation.gd · ai_easy.gd · ai_medium.gd · ai_hard.g
 game/     game_director.gd (turn/interaction orchestration) · intent_provider.gd · human_intent.gd
 ui/       board_view.gd (_draw() board) · hud.gd (code-built panel) · palette.gd
 scenes/   main.tscn
-tools/    8 CLI scripts: tests, batch simulation, screenshots
+tools/    13 CLI scripts: tests, batch simulation, screenshots
 assets/   terrain/ (used) · resource.src/ (originals, not imported)
 docs/     preview and gameplay screenshots
 ```
@@ -180,9 +180,14 @@ docs/     preview and gameplay screenshots
 | `verify_topology.gd` | yes | Asserts 19 hexes / 54 vertices / 72 edges and the degree distributions |
 | `test_rules.gd` | yes | 46 rule unit tests |
 | `test_seed.gd` | yes | Seed parsing + the official number-placement rules |
+| `test_pick.gd` | yes | Touch picking: a tap inside a highlighted vertex must never fire a road |
+| `test_trade_dialog.gd` | yes | Bank-trade dialog unit tests |
+| `test_dev_dialog.gd` | yes | Dev-card / turn-split unit tests |
 | `sim_runner.gd` | yes | Batch games, win-rate matrix, conservation invariants |
 | `screenshot.gd` | **no** | Renders the board to a PNG with a self-check |
 | `shot_dialog.gd` | **no** | Drives the restart dialog and captures it |
+| `shot_trade_dialog.gd` | **no** | Captures the bank-trade dialog |
+| `shot_dev_dialog.gd` | **no** | Captures the dev-card dialog |
 | `test_interaction.gd` | **no** | Simulates human clicks through a full game (M2 acceptance) |
 
 ```bash
@@ -191,9 +196,10 @@ GODOT=/Applications/Godot.app/Contents/MacOS/Godot
 $GODOT --headless --path . --script res://tools/verify_topology.gd
 $GODOT --headless --path . --script res://tools/test_rules.gd
 $GODOT --headless --path . --script res://tools/test_seed.gd
+$GODOT --headless --path . --script res://tools/test_pick.gd
 $GODOT --headless --path . --script res://tools/sim_runner.gd -- 500
 
-# These three must NOT be run with --headless, and need --resolution 1280x720
+# These must NOT be run with --headless, and need --resolution 1280x720
 $GODOT --path . --resolution 1280x720 --script res://tools/test_interaction.gd -- 6000
 $GODOT --path . --resolution 1280x720 --script res://tools/shot_dialog.gd
 $GODOT --path . --resolution 1280x720 --script res://tools/screenshot.gd -- \

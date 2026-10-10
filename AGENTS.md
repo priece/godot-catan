@@ -47,6 +47,7 @@ $GODOT --headless --path . --script res://tools/test_rules.gd         # 46 rule 
 $GODOT --headless --path . --script res://tools/test_trade_dialog.gd  # 24 bank-trade-dialog unit tests
 $GODOT --headless --path . --script res://tools/test_dev_dialog.gd    # 56 dev-card/turn-split unit tests
 $GODOT --headless --path . --script res://tools/test_seed.gd          # seed parsing + official number rules
+$GODOT --headless --path . --script res://tools/test_pick.gd          # touch picking, "vertex wins" geometry
 $GODOT --headless --path . --script res://tools/sim_runner.gd -- 500  # 500-game batch, prints win-rate matrix
 ```
 
@@ -131,7 +132,9 @@ ai/       ai_base.gd (shared scoring + IntentProvider impl), ai_easy/medium/hard
 game/     game_director.gd (turn/interaction orchestration), intent_provider.gd, human_intent.gd
 ui/       board_view.gd (_draw() board painting), hud.gd (right-hand panel, code-built), palette.gd
 scenes/   main.tscn — root Main → BoardView (Node2D), HUD (CanvasLayer), GameDirector (Node)
-tools/    8 CLI scripts: 4 headless-capable tests + 3 render-dependent + probe_seed.gd
+tools/    13 CLI scripts — headless tests (verify_topology / test_rules / test_seed / test_pick /
+          test_trade_dialog / test_dev_dialog / sim_runner), render-dependent (screenshot /
+          shot_dialog / shot_trade_dialog / shot_dev_dialog / test_interaction), probe_seed.gd
 assets/   terrain/ (imported, downscaled) and resource.src/ (all originals, .gdignore'd)
 docs/     board_preview.png and gameplay screenshots
 DESIGN.md Full design document (Chinese) — the authoritative reference
@@ -187,7 +190,8 @@ Read this section before debugging anything UI- or generation-related.
 4. **Any script awaiting `RenderingServer.frame_post_draw` must not run with `--headless`.**
    The signal never fires, the main loop spins forever, and the process gets killed — exit code 137
    with nothing in the log but the version banner. That looks like "no output", not like an error.
-   Affected: `screenshot.gd`, `shot_dialog.gd`, `test_interaction.gd`.
+   Affected: `screenshot.gd`, `shot_dialog.gd`, `shot_trade_dialog.gd`, `shot_dev_dialog.gd`,
+   `test_interaction.gd`.
 
 5. **After changing a signal's parameter list, grep the whole repo for `.emit(`.**
    Production code gets updated and test scripts silently do not; the symptom is
@@ -217,6 +221,18 @@ Read this section before debugging anything UI- or generation-related.
 
 11. **Never delete the `.workbuddy/` directory.** It is this project's accumulated notes, not a cache.
     It is intentionally git-ignored, so it will not be pushed.
+
+12. **Touch picking must be "vertex wins", never "nearest wins".** `Pick.ANY` originally chose between a
+    vertex and an edge by *distance* — a mouse-only rule. A road is a segment radiating from a vertex,
+    so as a finger slides along the road direction the distance to that segment barely grows: "the road
+    is nearer" is always true, and tapping a settlement kept building a road instead (found on Android).
+    `_nearest_any` now returns the vertex **whenever the tap lands inside an already-highlighted
+    vertex's radius**; the edge does not compete at all. Two things make the enlarged radius safe:
+    `PICK_VERTEX_R = 0.40` (≈25 px at `px_per_unit = 62` — sized for a fingertip, not a cursor), and the
+    official rule that settlements must be ≥2 edges apart, which guarantees an edge never has a
+    highlighted vertex at *both* ends — so no road loses more than one end of its hit area.
+    `tools/test_pick.gd` locks this in: it sweeps the hit zone of all 54 vertices (5184 sample points)
+    and asserts nothing there can fire an edge, plus that all 72 road midpoints stay clickable.
 
 12. **Do not guess macOS system colours from memory — ask the OS:**
     `swift -e 'import AppKit; print(NSColor.systemRed.usingColorSpace(.sRGB)!)'`.

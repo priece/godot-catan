@@ -15,8 +15,8 @@ signal edge_clicked(e: int)
 signal hex_clicked(h: int)
 
 ## 当前允许点选的对象类型（由 GameDirector 设置）
-## ANY = 顶点和边同时可选，按"离鼠标更近"判定 —— 人类回合需要这种模式，
-##       否则只能二选一，想点路就点不到村庄。
+## ANY = 顶点和边同时可选 —— 人类回合需要这种模式，否则只能二选一，
+##       想点路就点不到村庄。判定规则是**顶点优先**，不是"谁离得更近谁赢"。
 enum Pick { NONE, VERTEX, EDGE, HEX, ANY }
 
 # ---------------- 可调参数 ----------------
@@ -42,8 +42,14 @@ const VERTEX_R := 0.05
 const ROBBER_R := 0.20
 const PORT_OUT := 0.46
 const ROAD_W := 0.13
-const PICK_VERTEX_R := 0.26      ## 顶点命中半径（世界单位）
-const PICK_EDGE_R := 0.17        ## 边的命中半径（点到线段距离）
+## 顶点命中半径（世界单位）。**要按触摸屏的尺寸定，不能按鼠标定**：
+## 手指接触面积约 40~50px，旧值 0.26×62 ≈ 16px 在手机上几乎点不准，
+## 于是"想建村"时手指稍一偏移就落进旁边道路的热区里。
+## 0.40×62 ≈ 25px。敢给这么大是有依据的：官方规则要求村庄之间相隔 ≥2 条边，
+## 所以**同一条边的两端不可能同时是可建村/可升城的顶点**，
+## 把顶点热区加大，绝不会把某条道路的两头同时堵死（最坏也留 ~37px 可点中段）。
+const PICK_VERTEX_R := 0.40
+const PICK_EDGE_R := 0.18        ## 边的命中半径（点到线段距离）
 
 ## 左上角地形图例的版式
 const LEGEND_X := 14.0
@@ -194,26 +200,24 @@ func _update_hover(pos: Vector2) -> void:
 		hover_hex = h
 		queue_redraw()
 
-## 在"顶点 / 边"里挑离鼠标更近的那一个（都未被高亮则返回 -1）
+## 在"顶点 / 边"里挑一个点选目标 —— **顶点优先**：
+## 只要落点在某个**已高亮顶点**的命中圈内，就直接判为该顶点，道路完全不参与竞争。
+##
+## 为什么不用"谁离得更近谁赢"：那是给鼠标设计的。触屏上手指有面积，
+## 而道路是从顶点发散的线段 —— 手指沿道路方向偏出去时，到线段的距离几乎不增长，
+## 于是"离道路更近"永远成立，玩家点村落十有八九被判成修路（安卓上就是这么暴露的）。
+## 改成顶点独占后，村落热区内不会再触发道路。
+##
+## 代价（可接受）：可建村顶点两旁各让出一段道路热区。但村庄之间必须隔 ≥2 条边，
+## 一条边最多只有一端可建村，所以任何一条道路都还留着 ≥37px 的中间段可点。
 func _nearest_any(pos: Vector2) -> Array:
-	var v := _pick_vertex(pos)
+	var v := _pick_highlighted_vertex(pos)
+	if v >= 0:
+		return [v, -1]
 	var e := _pick_edge(pos)
-	var dv := INF
-	var de := INF
-	if v >= 0 and highlight_vertices.has(v):
-		dv = _p(topo.vertices[v]).distance_to(pos)
-	else:
-		v = -1
 	if e >= 0 and highlight_edges.has(e):
-		var ea: Vector2i = topo.edges[e]
-		de = _dist_to_segment(pos, _p(topo.vertices[ea.x]), _p(topo.vertices[ea.y]))
-	else:
-		e = -1
-	if v < 0 and e < 0:
-		return [-1, -1]
-	if de < dv:
 		return [-1, e]
-	return [v, -1]
+	return [-1, -1]
 
 func _handle_click(pos: Vector2) -> void:
 	match pick_mode:
@@ -240,6 +244,19 @@ func _pick_vertex(pos: Vector2) -> int:
 	var best := -1
 	var best_d := PICK_VERTEX_R * px_per_unit
 	for v in topo.vertices.size():
+		var d := _p(topo.vertices[v]).distance_to(pos)
+		if d < best_d:
+			best_d = d
+			best = v
+	return best
+
+## 在**已高亮的顶点**里找离 pos 最近的一个（超出命中半径返回 -1）。
+## 与 _pick_vertex 的区别：只在可点的顶点里找。它专门服务于 Pick.ANY 的
+## "顶点优先"判定 —— 没高亮的顶点周围，道路该能点还是能点。
+func _pick_highlighted_vertex(pos: Vector2) -> int:
+	var best := -1
+	var best_d := PICK_VERTEX_R * px_per_unit
+	for v in highlight_vertices:
 		var d := _p(topo.vertices[v]).distance_to(pos)
 		if d < best_d:
 			best_d = d
@@ -491,9 +508,11 @@ func _draw_spot_highlights() -> void:
 		var b := _p(topo.vertices[e.y])
 		draw_line(a, b, HL_SHADOW, ROAD_W * px_per_unit + 9.0, true)
 		draw_line(a, b, HL_COLOR, ROAD_W * px_per_unit + 5.0, true)
+	# 顶点高亮画大一点：它就是"可建村按钮"的视觉提示。
+	# 画得比热区小太多，玩家会以为自己没点中，进而在旁边乱戳（触屏上尤其明显）。
 	for v in highlight_vertices:
 		var c := _p(topo.vertices[v])
-		var r := 0.15 * px_per_unit
+		var r := 0.20 * px_per_unit
 		draw_circle(c, r + 3.0, HL_SHADOW)
 		draw_circle(c, r, HL_COLOR)
 		draw_circle(c, r * 0.45, Color(1, 1, 1, 0.85))
@@ -502,8 +521,9 @@ func _draw_hover() -> void:
 	var hot := Color(1.0, 0.78, 0.15)
 	if hover_vertex >= 0:
 		var c := _p(topo.vertices[hover_vertex])
-		draw_circle(c, 0.20 * px_per_unit, Color(hot.r, hot.g, hot.b, 0.85))
-		draw_arc(c, 0.20 * px_per_unit, 0.0, TAU, 24, Color(0.35, 0.25, 0.0, 0.8), 2.0, true)
+		var hr := 0.26 * px_per_unit
+		draw_circle(c, hr, Color(hot.r, hot.g, hot.b, 0.85))
+		draw_arc(c, hr, 0.0, TAU, 24, Color(0.35, 0.25, 0.0, 0.8), 2.0, true)
 	if hover_edge >= 0:
 		var e: Vector2i = topo.edges[hover_edge]
 		draw_line(_p(topo.vertices[e.x]), _p(topo.vertices[e.y]),
