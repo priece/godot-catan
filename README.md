@@ -166,9 +166,9 @@ core/     Pure logic — no Node/UI dependency, headless-runnable
           game_controller.gd · rules.gd · longest_road.gd · resources.gd
 ai/       ai_base.gd · evaluation.gd · ai_easy.gd · ai_medium.gd · ai_hard.gd
 game/     game_director.gd (turn/interaction orchestration) · intent_provider.gd · human_intent.gd
-ui/       board_view.gd (_draw() board) · hud.gd (code-built panel) · palette.gd
+ui/       board_view.gd (_draw() board) · hud.gd (code-built panel) · palette.gd · safe_area.gd
 scenes/   main.tscn
-tools/    13 CLI scripts: tests, batch simulation, screenshots
+tools/    20 CLI scripts: tests, batch simulation, screenshots, probes
 assets/   terrain/ (used) · resource.src/ (originals, not imported)
 docs/     preview and gameplay screenshots
 ```
@@ -181,6 +181,9 @@ docs/     preview and gameplay screenshots
 | `test_rules.gd` | yes | 46 rule unit tests |
 | `test_seed.gd` | yes | Seed parsing + the official number-placement rules |
 | `test_pick.gd` | yes | Touch picking: a tap inside a highlighted vertex must never fire a road |
+| `test_safe_area.gd` | yes | Phone safe-area insets + board/HUD layout math (desktop origin must stay (510, 360)) |
+| `test_legend.gd` | yes | Legend: build costs must come from `Res.COST_*`, panel stays inside the viewport and off the hexes |
+| `test_ports.gd` | yes | Port badges: one glyph each (`?` / 木砖羊麦矿), and each badge centre must sit on its edge's perpendicular bisector |
 | `test_trade_dialog.gd` | yes | Bank-trade dialog unit tests |
 | `test_dev_dialog.gd` | yes | Dev-card / turn-split unit tests |
 | `sim_runner.gd` | yes | Batch games, win-rate matrix, conservation invariants |
@@ -188,7 +191,10 @@ docs/     preview and gameplay screenshots
 | `shot_dialog.gd` | **no** | Drives the restart dialog and captures it |
 | `shot_trade_dialog.gd` | **no** | Captures the bank-trade dialog |
 | `shot_dev_dialog.gd` | **no** | Captures the dev-card dialog |
+| `shot_help.gd` | **no** | Clicks the "?" legend button, captures open/closed + a simulated phone safe area; also clicks a board vertex sitting under the open panel |
 | `test_interaction.gd` | **no** | Simulates human clicks through a full game (M2 acceptance) |
+| `probe_legend.gd` / `probe_seed.gd` / `probe_ports.gd` | yes | Read-only probes: legend geometry / seed scans / port-badge offset angles |
+| `crop_shot.gd` | yes | Crops and magnifies a rectangle of a saved screenshot (macOS `sips` cannot crop off-centre) |
 
 ```bash
 GODOT=/Applications/Godot.app/Contents/MacOS/Godot
@@ -197,11 +203,18 @@ $GODOT --headless --path . --script res://tools/verify_topology.gd
 $GODOT --headless --path . --script res://tools/test_rules.gd
 $GODOT --headless --path . --script res://tools/test_seed.gd
 $GODOT --headless --path . --script res://tools/test_pick.gd
+$GODOT --headless --path . --script res://tools/test_safe_area.gd
+$GODOT --headless --path . --script res://tools/test_legend.gd
+$GODOT --headless --path . --script res://tools/test_ports.gd
 $GODOT --headless --path . --script res://tools/sim_runner.gd -- 500
+
+# Crop + magnify a rectangle of an already-saved screenshot (handy for 20px UI details)
+$GODOT --headless --path . --script res://tools/crop_shot.gd -- /tmp/board.png 185 210 135 265 3 /tmp/crop.png
 
 # These must NOT be run with --headless, and need --resolution 1280x720
 $GODOT --path . --resolution 1280x720 --script res://tools/test_interaction.gd -- 6000
 $GODOT --path . --resolution 1280x720 --script res://tools/shot_dialog.gd
+$GODOT --path . --resolution 1280x720 --script res://tools/shot_help.gd
 $GODOT --path . --resolution 1280x720 --script res://tools/screenshot.gd -- \
     res://scenes/main.tscn /tmp/board.png 30 auto
 ```

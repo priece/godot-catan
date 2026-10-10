@@ -158,9 +158,9 @@ core/     纯逻辑层——不依赖 Node/UI，可在无头模式下运行
           game_controller.gd · rules.gd · longest_road.gd · resources.gd
 ai/       ai_base.gd · evaluation.gd · ai_easy.gd · ai_medium.gd · ai_hard.gd
 game/     game_director.gd（回合与交互调度）· intent_provider.gd · human_intent.gd
-ui/       board_view.gd（_draw 手绘棋盘）· hud.gd（全代码搭建的面板）· palette.gd
+ui/       board_view.gd（_draw 手绘棋盘）· hud.gd（全代码搭建的面板）· palette.gd · safe_area.gd
 scenes/   main.tscn
-tools/    13 个命令行脚本：测试、批量对局、截图
+tools/    20 个命令行脚本：测试、批量对局、截图、探针
 assets/   terrain/（游戏用的缩略图）· resource.src/（原图，不让 Godot 导入）
 docs/     预览图与对局截图
 ```
@@ -173,6 +173,9 @@ docs/     预览图与对局截图
 | `test_rules.gd` | 是 | 46 项规则单元测试 |
 | `test_seed.gd` | 是 | 种子解析 + 官方数字摆放规则 |
 | `test_pick.gd` | 是 | 触屏拾取：点在高亮顶点里绝不能触发修路 |
+| `test_safe_area.gd` | 是 | 手机安全区取值 + 棋盘/面板布局算式（桌面棋盘原点必须仍是 (510, 360)） |
+| `test_legend.gd` | 是 | 图例：建造花费必须取自 `Res.COST_*`，面板不越出视口 / 不压地块 |
+| `test_ports.gd` | 是 | 港口牌：牌面只有一个字（`?` / 木砖羊麦矿），且牌心必须落在所在边的垂直平分线上 |
 | `test_trade_dialog.gd` | 是 | 银行兑换弹窗单元测试 |
 | `test_dev_dialog.gd` | 是 | 发展卡 / 回合拆分单元测试 |
 | `sim_runner.gd` | 是 | 批量对局、胜率矩阵、守恒不变量 |
@@ -180,7 +183,10 @@ docs/     预览图与对局截图
 | `shot_dialog.gd` | **否** | 驱动重开面板并截图 |
 | `shot_trade_dialog.gd` | **否** | 截图银行兑换弹窗 |
 | `shot_dev_dialog.gd` | **否** | 截图发展卡弹窗 |
+| `shot_help.gd` | **否** | 点"?"图例按钮，截图收起/展开，并模拟手机安全区再截一张；还会点一个被面板罩住的棋盘点 |
 | `test_interaction.gd` | **否** | 模拟人类点击打完整局（M2 验收） |
+| `probe_legend.gd` / `probe_seed.gd` / `probe_ports.gd` | 是 | 只读探针：图例版式 / 种子扫描 / 港口牌偏移角度 |
+| `crop_shot.gd` | 是 | 把已存截图的一块矩形裁下来放大（macOS 的 `sips` 只会居中裁） |
 
 ```bash
 GODOT=/Applications/Godot.app/Contents/MacOS/Godot
@@ -189,11 +195,18 @@ $GODOT --headless --path . --script res://tools/verify_topology.gd
 $GODOT --headless --path . --script res://tools/test_rules.gd
 $GODOT --headless --path . --script res://tools/test_seed.gd
 $GODOT --headless --path . --script res://tools/test_pick.gd
+$GODOT --headless --path . --script res://tools/test_safe_area.gd
+$GODOT --headless --path . --script res://tools/test_legend.gd
+$GODOT --headless --path . --script res://tools/test_ports.gd
 $GODOT --headless --path . --script res://tools/sim_runner.gd -- 500
+
+# 把已存截图的一块矩形裁下来放大（检查 20px 级别的小 UI 细节时很好用）
+$GODOT --headless --path . --script res://tools/crop_shot.gd -- /tmp/board.png 185 210 135 265 3 /tmp/crop.png
 
 # 以下几项**不能**加 --headless，且必须带 --resolution 1280x720
 $GODOT --path . --resolution 1280x720 --script res://tools/test_interaction.gd -- 6000
 $GODOT --path . --resolution 1280x720 --script res://tools/shot_dialog.gd
+$GODOT --path . --resolution 1280x720 --script res://tools/shot_help.gd
 $GODOT --path . --resolution 1280x720 --script res://tools/screenshot.gd -- \
     res://scenes/main.tscn /tmp/board.png 30 auto
 ```

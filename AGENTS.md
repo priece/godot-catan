@@ -48,8 +48,17 @@ $GODOT --headless --path . --script res://tools/test_trade_dialog.gd  # 24 bank-
 $GODOT --headless --path . --script res://tools/test_dev_dialog.gd    # 56 dev-card/turn-split unit tests
 $GODOT --headless --path . --script res://tools/test_seed.gd          # seed parsing + official number rules
 $GODOT --headless --path . --script res://tools/test_pick.gd          # touch picking, "vertex wins" geometry
+$GODOT --headless --path . --script res://tools/test_safe_area.gd     # safe-area insets + board/HUD layout math
+$GODOT --headless --path . --script res://tools/test_legend.gd        # legend contents come from Res.COST_*, panel geometry
+$GODOT --headless --path . --script res://tools/test_ports.gd         # port badge wording + "centre sits on the edge's perpendicular bisector"
 $GODOT --headless --path . --script res://tools/sim_runner.gd -- 500  # 500-game batch, prints win-rate matrix
 ```
+
+`tools/crop_shot.gd` is not a test but a must-have companion to any visual change: it crops a rectangle
+out of a saved screenshot and magnifies it with nearest-neighbour, so you can actually *read* 20 px UI
+details (port badges, legend text, vertex anchors) instead of guessing from a full-size image.
+It is pure `Image` work, so it **can** run headless — and note that macOS `sips -c` only crops from the
+centre, `--cropOffset` is silently ignored, so do not reach for it.
 
 `sim_runner.gd` takes a second argument: `h2h` (1 hard vs 3 medium) or `v` (verbose, dumps one game).
 It also asserts two invariants across every game: **resource conservation** (bank + players = 19 cards
@@ -64,12 +73,23 @@ $GODOT --path . --resolution 1280x720 --script res://tools/screenshot.gd -- res:
 $GODOT --path . --resolution 1280x720 --script res://tools/shot_dialog.gd
 $GODOT --path . --resolution 1280x720 --script res://tools/shot_trade_dialog.gd
 $GODOT --path . --resolution 1280x720 --script res://tools/shot_dev_dialog.gd
+$GODOT --path . --resolution 1280x720 --script res://tools/shot_help.gd
 $GODOT --path . --resolution 1280x720 --script res://tools/test_interaction.gd -- 6000
 ```
 
 - `screenshot.gd` args: `<scene> <out.png> <wait_frames> <zoom> [auto]`. Append **`auto`** to hand the
   human seat to the AI — without it the game stalls in setup waiting for input and you screenshot an empty board.
 - `test_interaction.gd` simulates real clicks through the same signals the UI emits (M2 acceptance).
+- `shot_help.gd` pushes a **real** mouse click at the "?" button via `root.push_input` and asserts the
+  legend toggles without triggering a board build; it then **moves the board up** so a board vertex
+  really falls under the open panel and clicks it — the overlay must swallow that click too. It also
+  writes a 2× crop of the top-left corner (`*_zoom.png`) — the button and the legend are both in that
+  tiny patch, easy to miss at full size.
+- `probe_legend.gd` is a read-only probe: prints the legend's size and what it covers (hexes, vertices,
+  port badges). Handy after editing legend copy/rows — cheaper than eyeballing a screenshot.
+- `probe_ports.gd` prints, for all 9 port edges, the angle between the **radial** direction and the
+  edge's **outward normal**, plus how far the badge would move if you used the wrong one. Run it before
+  touching port placement — see trap 16.
 - `--resolution` **must match the design resolution (1280×720)** for anything that involves mouse coordinates. See trap 3.
 
 ---
@@ -130,11 +150,14 @@ core/     Pure logic, no Node/UI dependency
           resources.gd         every constant: resources, terrain, dev cards, ports, costs
 ai/       ai_base.gd (shared scoring + IntentProvider impl), ai_easy/medium/hard.gd, evaluation.gd
 game/     game_director.gd (turn/interaction orchestration), intent_provider.gd, human_intent.gd
-ui/       board_view.gd (_draw() board painting), hud.gd (right-hand panel, code-built), palette.gd
+ui/       board_view.gd (_draw() board painting), hud.gd (right-hand panel, code-built), palette.gd,
+          safe_area.gd (DisplayServer safe-area → viewport insets, shared by board + HUD)
 scenes/   main.tscn — root Main → BoardView (Node2D), HUD (CanvasLayer), GameDirector (Node)
-tools/    13 CLI scripts — headless tests (verify_topology / test_rules / test_seed / test_pick /
-          test_trade_dialog / test_dev_dialog / sim_runner), render-dependent (screenshot /
-          shot_dialog / shot_trade_dialog / shot_dev_dialog / test_interaction), probe_seed.gd
+tools/    20 CLI scripts — headless tests (verify_topology / test_rules / test_seed / test_pick /
+          test_safe_area / test_legend / test_ports / test_trade_dialog / test_dev_dialog / sim_runner),
+          render-dependent (screenshot / shot_dialog / shot_trade_dialog / shot_dev_dialog /
+          shot_help / test_interaction), probes (probe_seed.gd / probe_legend.gd / probe_ports.gd),
+          crop_shot.gd (screenshot crop+zoom)
 assets/   terrain/ (imported, downscaled) and resource.src/ (all originals, .gdignore'd)
 docs/     board_preview.png and gameplay screenshots
 DESIGN.md Full design document (Chinese) — the authoritative reference
@@ -157,6 +180,26 @@ DESIGN.md Full design document (Chinese) — the authoritative reference
   (line count + last line text) — comparing an array reference to itself always reports "unchanged".
 - **Restarting keeps the log** (`GameDirector._session_log`): it only ever grows.
 - **Tunables are `@export`** so they can be tweaked in the inspector (seed, zoom, origin, display flags).
+- **Phone safe area is measured, not hardcoded** (`SafeArea.insets()` → `Vector4(left, top, right, bottom)`
+  in *viewport* pixels). Get it from `DisplayServer.get_display_safe_area()` and let the board / HUD inset
+  by it; the `MIN_*` fallback margins apply **only on mobile** so desktop layout stays pixel-identical.
+  Never park a control at a raw `x = 14` — that is exactly where a left-side camera cutout sits in
+  landscape. Layout math that consumes insets is kept in static pure functions
+  (`BoardView.board_origin_for` / `HUD.content_rect`) so it can be unit-tested headless.
+- **The terrain legend is collapsed by default** behind the top-left "?" button (`BoardView.help_center()`),
+  which turns into "×" while open. The panel is a **two-column overlay**: left = terrain swatch + terrain
+  name + the resource it yields, right = 修路 / 村落 / 城市 / 发展卡 and what each costs. Its width is
+  **measured from the strings at runtime** (`BoardView.legend_size()`), never hardcoded.
+  The cost numbers come straight from `Res.COST_*` — **never re-type them into the UI**.
+  The panel background may run to the screen edge, but its *content* must stay inside the safe area.
+- **Port badges carry a single glyph**: `?` for a generic 3:1 harbour, otherwise one character of the
+  resource short name (木/砖/羊/麦/矿, taken from `UIPalette.RES_SHORT` — never re-typed here).
+  The ratio itself is omitted on purpose: veterans know it, and text on the badge just eats space.
+  `BoardView.port_marker_pos()` places a badge at the edge midpoint offset along the edge's
+  **outward normal**; see trap 16 for why the radial direction is wrong.
+- **Anything drawn on top of the board must also swallow input.** The legend covers the top-left sea and
+  can reach a pickable vertex on a short viewport; `BoardView._hit_legend()` consumes the click, otherwise
+  tapping the legend builds a settlement underneath it ("点帮助却建了座村庄").
 - **Artwork**: all originals live in `assets/resource.src/` (read-only, `.gdignore`d so Godot never
   imports them). Derived, downscaled copies go in `assets/<type>/` for the game to use.
 - **UI palette**: as of the current design, 4 player colors are blue/red/orange/green and names are
@@ -234,12 +277,28 @@ Read this section before debugging anything UI- or generation-related.
     `tools/test_pick.gd` locks this in: it sweeps the hit zone of all 54 vertices (5184 sample points)
     and asserts nothing there can fire an edge, plus that all 72 road midpoints stay clickable.
 
-12. **Do not guess macOS system colours from memory — ask the OS:**
+13. **Do not guess macOS system colours from memory — ask the OS:**
     `swift -e 'import AppKit; print(NSColor.systemRed.usingColorSpace(.sRGB)!)'`.
     (The red used for player "小红" is `systemRed` = `#FF383C`.)
 
-13. **macOS notes**: `timeout` does not exist; a harmless `rename_error` on headless shutdown can be
+14. **macOS notes**: `timeout` does not exist; a harmless `rename_error` on headless shutdown can be
     ignored; Godot rewrites the header comments of `project.godot` (this is normal).
+
+15. **A safe-area inset that is applied on desktop silently rewrites every screenshot baseline.**
+    `DisplayServer.get_display_safe_area()` returns the whole screen on desktop, so the *measured* inset
+    is 0 there — but a naive `max(measured, MIN_MARGIN)` would hand the desktop a 18 px margin anyway and
+    shift `board_origin` from (510, 360) to (518, 360), invalidating every previously captured reference
+    image. The fallback margins are therefore gated behind `OS.has_feature("mobile")`, and
+    `tools/test_safe_area.gd` asserts the desktop origin stays exactly (510, 360).
+
+16. **A port badge is offset along the edge's outward *normal*, not the *radial* direction.**
+    The old code used `mid + mid.normalized() * PORT_OUT` ("board centre → edge midpoint"). Those two
+    only agree when an edge happens to be perpendicular to the radius; on the island's coastal port
+    edges they differ by **23.4° or 49.1°**, which slid the badge off its edge by up to **0.38 world
+    units (~24 px)** — it reads as "the harbour isn't lined up with its edge". `BoardView.port_marker_pos()`
+    takes the edge's perpendicular, flips it away from the board centre, and
+    `tools/test_ports.gd` asserts the lateral offset is **< 0.002**. `tools/probe_ports.gd` prints the
+    per-edge angles if you ever want to see the damage.
 
 ---
 
@@ -254,9 +313,13 @@ Before considering a change complete, run these and make sure they are green:
 | `test_trade_dialog.gd` | `通过 24 · 失败 0` / PASS |
 | `test_dev_dialog.gd` | `通过 56 · 失败 0` / PASS（含 begin_turn 与 start_turn+roll_dice 骰子序列一致） |
 | `test_seed.gd` | all checks pass |
+| `test_safe_area.gd` | `通过 18 · 失败 0` / PASS（含桌面棋盘原点仍为 (510, 360)） |
+| `test_legend.gd` | `通过 36 · 失败 0` / PASS（花费取自 `Res.COST_*`，面板不越出视口 / 不压地块） |
+| `test_ports.gd` | `通过 51 · 失败 0` / PASS（牌面一个字，牌心横向偏移 < 0.002；不压地块、不重叠） |
 | `sim_runner.gd -- 30` | `不变量：棋盘异常 0 · 资源守恒破坏 0 · 状态完整性破坏 0` and `M1 验收结果：PASS` |
 | `test_interaction.gd -- 6000` | `M2 验收结果：PASS` |
 | `shot_dialog.gd` | `--- 结果：PASS ---` |
+| `shot_help.gd` | 点击后 `legend_open=true`、点面板亦 `误落子 0 次`，PNG written |
 | `screenshot.gd` | board self-check passes, `地形贴图: 6/6 已加载`, PNG written |
 
 Also: if you changed a rule, an AI heuristic, or generation logic, **report the numbers**

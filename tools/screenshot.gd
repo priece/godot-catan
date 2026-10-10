@@ -63,14 +63,14 @@ func _report(node: Node) -> void:
 			print("!! " + e)
 
 	# 把 9 个港口的类型与位置直接打出来：小尺寸截图靠肉眼分颜色不可靠
-	var port_names := ["3:1 通用", "2:1 木材", "2:1 砖块", "2:1 羊毛", "2:1 麦子", "2:1 矿石"]
 	var counts := {}
 	for eid in bv.board.port_edges:
 		var e: Vector2i = bv.topo.edges[eid]
 		var t: int = bv.board.vertex_port[e.x]
 		counts[t] = counts.get(t, 0) + 1
 		var mid: Vector2 = (bv.topo.vertices[e.x] + bv.topo.vertices[e.y]) * 0.5
-		print("   port %-9s 位于世界坐标 (%.2f, %.2f)" % [port_names[t], mid.x, mid.y])
+		print("   港口牌「%s」 所在边的中点 (%.2f, %.2f) · 牌心屏幕坐标 %s"
+			% [bv.port_label(t), mid.x, mid.y, bv.port_marker_pos(eid)])
 	print("  港口类型统计: %s" % [counts])
 
 	# 地形贴图加载情况

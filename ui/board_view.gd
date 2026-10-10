@@ -27,7 +27,11 @@ enum Pick { NONE, VERTEX, EDGE, HEX, ANY }
 @export var board_origin: Vector2 = Vector2(510.0, 360.0)
 @export var show_vertices: bool = true
 @export var show_ports: bool = true
+## 左上角是否提供"?"图例按钮
 @export var show_legend: bool = true
+## 图例当前是否展开。**默认收起**：那块地方在手机上很金贵，
+## 但新玩家确实需要它认地形，所以收进一个一按就开的按钮里。
+@export var legend_open: bool = false
 ## 用真实贴图画地块。关掉就回退到纯色块（调试 / 贴图缺失时用）
 @export var use_terrain_textures: bool = true
 
@@ -40,7 +44,10 @@ const COAST_BAND := 0.07
 const TOKEN_R := 0.355
 const VERTEX_R := 0.05
 const ROBBER_R := 0.20
+## 港口牌：牌心到**这条边的外法线方向**上 PORT_OUT 处的距离；牌子是边长 PORT_BOX 的方牌。
+## 牌面只有一个字（"?" 或资源短名），所以比早先"木x2 : 1"那种长条牌小得多。
 const PORT_OUT := 0.46
+const PORT_BOX := 0.32
 const ROAD_W := 0.13
 ## 顶点命中半径（世界单位）。**要按触摸屏的尺寸定，不能按鼠标定**：
 ## 手指接触面积约 40~50px，旧值 0.26×62 ≈ 16px 在手机上几乎点不准，
@@ -51,12 +58,34 @@ const ROAD_W := 0.13
 const PICK_VERTEX_R := 0.40
 const PICK_EDGE_R := 0.18        ## 边的命中半径（点到线段距离）
 
-## 左上角地形图例的版式
-const LEGEND_X := 14.0
-const LEGEND_Y := 58.0
-const LEGEND_W := 160.0
-const LEGEND_ROW_H := 31.0
-const LEGEND_HEX_R := 11.0
+## 左上角"?"按钮与展开后图例面板的版式。
+## 位置**不写死坐标**：先让开安全区（圆角 / 挖孔），再按按钮外缘对齐 ——
+## 手机横屏时挖孔常落在左侧，写死 14px 会让按钮正好被摄像头压住。
+const HELP_R := 17.0        ## 按钮半径
+const HELP_PAD := 10.0      ## 按钮外缘到安全区内侧的间距
+const LEGEND_GAP := 8.0     ## 按钮下缘到图例面板的间距
+
+## 图例面板内部版式。**宽度不写死**：由两列文字的实测宽度算出来
+## （见 legend_size()）—— 换字体或改文案时写死的宽度会把文字悄悄挤出面板，
+## 算出来测试才断言得住"面板不跑出视口"。
+const LEGEND_PAD := 12.0        ## 面板四周内边距
+const LEGEND_ROW_H := 31.0      ## 行高（两列共用，保证两列横线对齐）
+const LEGEND_HEX_R := 11.0      ## 地形色卡半径
+const LEGEND_COL_GAP := 18.0    ## 两列之间的空隙
+const LEGEND_HEX_GAP := 8.0     ## 色卡右缘 -> 地形名的间距
+const LEGEND_NAME_GAP := 10.0   ## 卡名右缘 -> 花费的间距
+const LEGEND_HEAD := 38.0       ## 面板上缘 -> 第一行行心的距离（含栏目名）
+const LEGEND_HDR_DY := 22.0     ## 栏目名基线相对面板上缘的下移量
+const LEGEND_FS := 12           ## 行文字号
+
+## 两列的栏目名
+const LEGEND_HDR_TERRAIN := "地形图例"
+const LEGEND_HDR_COST := "建造花费"
+## 地形色卡的排列顺序（与棋盘上常见度无关，按资源种类走，方便和下面一列对照）
+const LEGEND_TERRAINS := [
+	Res.Terrain.FOREST, Res.Terrain.HILLS, Res.Terrain.PASTURE,
+	Res.Terrain.FIELDS, Res.Terrain.MOUNTAINS, Res.Terrain.DESERT,
+]
 
 ## 地块贴图。只采样图片中间一小块：
 ## 原图是带白边的圆角方形插画（四角还有 AI 水印），六边形按外接矩形取 UV
@@ -97,6 +126,10 @@ var highlight_hexes: Array[int] = []
 var hover_vertex := -1
 var hover_edge := -1
 var hover_hex := -1
+var _help_hover := false        ## 鼠标/手指是否悬在左上角"?"按钮上
+## 缓存的安全区。`_draw()` 每帧都要用（画"?"按钮），而 SafeArea.insets() 内部会
+## 调 DisplayServer —— 那是系统调用，不能每帧问一次。只在 ready 和视口变化时刷新。
+var _ins := Vector4.ZERO
 
 func _ready() -> void:
 	topo = BoardTopology.instance()
@@ -109,8 +142,8 @@ func _ready() -> void:
 	_rebuild()
 	# 跟随视口重排棋盘：手机横屏比 16:9 更宽时，让棋盘在
 	# "视口扣掉右侧面板"的区域里居中，而不是死守设计稿坐标。
-	get_viewport().size_changed.connect(_fit_to_viewport)
-	_fit_to_viewport()
+	get_viewport().size_changed.connect(_on_viewport_changed)
+	_on_viewport_changed()
 
 ## 用一个带中文回退的系统字体，保证 _draw_string 里写中文也不会变豆腐块
 func _cjk_font() -> Font:
@@ -123,12 +156,26 @@ func _rebuild() -> void:
 	board = Board.generate(seed_value, beginner_board)
 	queue_redraw()
 
+## 视口变了就重算安全区 + 重排棋盘（手机转屏、窗口拉大都会走这里）
+func _on_viewport_changed() -> void:
+	_ins = SafeArea.insets()
+	_fit_to_viewport()
+
 ## 按当前视口重排棋盘：水平在"视口扣掉右侧信息面板"的区域里居中，
-## 垂直在视口中居中。1280×720 下结果为 (510, 360)，与旧版一致。
+## 垂直在视口中居中。1280×720 桌面下结果为 (510, 360)，与旧版一致。
 func _fit_to_viewport() -> void:
-	var vp := get_viewport_rect().size
-	board_origin = Vector2((vp.x - HUD.PANEL_W) * 0.5 + BOARD_X_BIAS, vp.y * 0.5)
+	board_origin = board_origin_for(get_viewport_rect().size, _ins)
 	queue_redraw()
+
+## 棋盘原点 = 「视口扣掉右侧面板、再扣掉四周安全区」这块区域的正中，
+## 再加上设计稿刻意右移的量（给左上角按钮腾地方）。
+##
+## 抽成静态纯函数是为了能 headless 单测：真机上视口 / 挖孔都不可控，
+## 只有把算式拆出来，才守得住"1280×720 桌面下仍必须是 (510, 360)"。
+static func board_origin_for(vp: Vector2, ins: Vector4) -> Vector2:
+	var left := ins.x
+	var right := vp.x - HUD.PANEL_W
+	return Vector2((left + right) * 0.5 + BOARD_X_BIAS, (ins.y + vp.y - ins.w) * 0.5)
 
 # ================= 对外接口（GameDirector 调用）=================
 
@@ -169,9 +216,41 @@ func player_color(pid: int) -> Color:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
+		if _hit_legend(event.position):
+			# 光标在图例面板上：面板是不透明的，底下的地块没必要跟着亮
+			_set_help_hover(false)
+			_clear_hover()
+			return
+		_set_help_hover(_hit_help(event.position))
 		_update_hover(event.position)
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		if _hit_help(event.position):
+			# 先吃掉这次点击再 return：否则按当前 pick 模式它还会被当成一次落子。
+			# （左上角离棋盘很远，出事概率低，但"点帮助却建了座村庄"这种 bug 一次就够呛。）
+			legend_open = not legend_open
+			get_viewport().set_input_as_handled()
+			queue_redraw()
+			return
+		if _hit_legend(event.position):
+			# 面板比原来的图例宽，会盖住棋盘最左边一点点。既然视觉上盖住了，
+			# 就必须在交互上也盖住 —— 否则点在图例文字上，底下那块地照样响应，
+			# 又变成"点帮助却建了座村庄"（这次是点了图例本体）。
+			get_viewport().set_input_as_handled()
+			return
 		_handle_click(event.position)
+
+## 清掉棋盘上的 hover 高亮（光标移到浮层上时用）
+func _clear_hover() -> void:
+	if hover_vertex != -1 or hover_edge != -1 or hover_hex != -1:
+		hover_vertex = -1
+		hover_edge = -1
+		hover_hex = -1
+		queue_redraw()
+
+func _set_help_hover(v: bool) -> void:
+	if v != _help_hover:
+		_help_hover = v
+		queue_redraw()
 
 func _update_hover(pos: Vector2) -> void:
 	var v := -1
@@ -311,39 +390,161 @@ func _draw() -> void:
 	_draw_pieces()
 	_draw_hover()
 	if show_legend:
-		_draw_legend()
+		_draw_help_button()
+		if legend_open:
+			_draw_legend()
 
-# ---------------- 地形图例 ----------------
+# ---------------- 左上角"?"按钮 ----------------
 
-## 左上角的图例：六种地形色卡 + 地形名 + 对应的资源。
+## 折叠态是一个"?"圆钮（问号 = 这里能点开说明），展开后变成"×"（再点收起）。
+## 位置跟着安全区走，手机上不会被圆角或挖孔压住。
+func help_center() -> Vector2:
+	return Vector2(_ins.x + HELP_PAD + HELP_R, _ins.y + HELP_PAD + HELP_R)
+
+## 命中圈比视觉半径大一圈：手指是一块面，按视觉尺寸判会"看着点中了却没反应"
+func _hit_help(pos: Vector2) -> bool:
+	if not show_legend:
+		return false
+	return pos.distance_to(help_center()) <= HELP_R + 7.0
+
+func _draw_help_button() -> void:
+	var c := help_center()
+	draw_circle(c + Vector2(0.0, 1.5), HELP_R, Color(0.0, 0.0, 0.0, 0.16))
+	draw_circle(c, HELP_R,
+		Color(0.878, 0.918, 0.973) if _help_hover else Color(1, 1, 1, 0.94))
+	draw_arc(c, HELP_R, 0.0, TAU, 40, Color(0.15, 0.15, 0.15, 0.45), 1.5, true)
+	var glyph := "×" if legend_open else "?"
+	var fs := 21
+	var ts := font.get_string_size(glyph, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+	draw_string(font, c + Vector2(-ts.x * 0.5, fs * 0.34), glyph,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(0.11, 0.11, 0.11))
+
+# ---------------- 图例 ----------------
+
+## 左上角展开的面板，两列并排：
+##   左列「地形图例」—— 六种地形的小六边形色卡 + 地形名 + 产出的资源；
+##   右列「建造花费」—— 修路 / 村落 / 城市 / 发展卡，各自要花哪些资源。
+##
 ## 色卡用小六边形而不是方块 —— 和棋盘上地块的形状一致，一眼能把颜色对上。
-func _draw_legend() -> void:
-	var terrains := [
-		Res.Terrain.FOREST, Res.Terrain.HILLS, Res.Terrain.PASTURE,
-		Res.Terrain.FIELDS, Res.Terrain.MOUNTAINS, Res.Terrain.DESERT,
+## 花费**直接从 Res.COST_* 读**，不手抄一遍：规则改了图例会跟着改，
+## 不会留下一份"看着像真的"的过期说明书（test_legend.gd 会核对这一点）。
+
+## 面板矩形。抽出来是为了三处共用：绘制、命中判定（吃点击）、单测。
+func legend_rect() -> Rect2:
+	var c := help_center()
+	return Rect2(Vector2(c.x - HELP_R, c.y + HELP_R + LEGEND_GAP), legend_size())
+
+## 光标 / 手指是否落在展开的面板上。面板浮在棋盘之上，落在它上面的点击
+## 必须由面板自己吃掉，否则底下那块地、那条路照样会响应。
+func _hit_legend(pos: Vector2) -> bool:
+	return show_legend and legend_open and legend_rect().has_point(pos)
+
+## 一行"修路 / 村落 / 城市 / 发展卡 -> 花费"的数据。
+func _legend_cost_rows() -> Array:
+	return [
+		["修路", Res.COST_ROAD],
+		["村落", Res.COST_SETTLEMENT],
+		["城市", Res.COST_CITY],
+		["发展卡", Res.COST_DEV],
 	]
-	var total_h := 36.0 + float(terrains.size()) * LEGEND_ROW_H
+
+func _legend_terrain_label(t: int) -> String:
+	var r: int = Res.TERRAIN_RES.get(t, -1)
+	return Res.TERRAIN_CN[t] + (" · " + Res.R_NAMES_CN[r] if r >= 0 else " · 无产出")
+
+## 花费字典 -> "木1 砖1 羊1 麦1"。资源按 R 枚举顺序排，图例与 HUD 用同一套短名。
+func _legend_cost_text(cost: Dictionary) -> String:
+	var parts := PackedStringArray()
+	for r in Res.R_COUNT:
+		if cost.has(r):
+			parts.append("%s%d" % [UIPalette.RES_SHORT[r], cost[r]])
+	return " ".join(parts)
+
+func _legend_text_w(s: String, fs: int) -> float:
+	return font.get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+
+## 两列的宽度：左列 = 色卡 + 间距 + 最长地形标签；右列 = 最长的"卡名 + 花费"。
+## 这里的间距和 _draw_legend 里用的是同一批常量 —— 量出来多宽就画多宽，
+## 不然会出现"算宽时按 8px、画图时按 12px"这种只在边缘显形的错位。
+func _legend_col_widths() -> Vector2:
+	var terrain_w := 0.0
+	for t in LEGEND_TERRAINS:
+		terrain_w = maxf(terrain_w, _legend_text_w(_legend_terrain_label(t), LEGEND_FS))
+	var col_a := LEGEND_HEX_R * 2.0 + LEGEND_HEX_GAP + terrain_w
+
+	var cost_w := 0.0
+	for row in _legend_cost_rows():
+		cost_w = maxf(cost_w, _legend_text_w(_legend_cost_text(row[1]), LEGEND_FS))
+	var col_b := _legend_name_w() + LEGEND_NAME_GAP + cost_w
+	return Vector2(col_a, col_b)
+
+## 右列里最长的卡名（"发展卡"）。花费要从它后面统一对齐开始，逐行才不会参差。
+func _legend_name_w() -> float:
+	var w := 0.0
+	for row in _legend_cost_rows():
+		w = maxf(w, _legend_text_w(row[0], LEGEND_FS))
+	return w
+
+## 面板尺寸。宽度由内容实测得出（见 _legend_col_widths），
+## 高度按行数堆叠，两列取行数多的那列。
+func legend_size() -> Vector2:
+	var cols := _legend_col_widths()
+	var rows: int = maxi(LEGEND_TERRAINS.size(), _legend_cost_rows().size())
+	return Vector2(
+		LEGEND_PAD * 2.0 + cols.x + LEGEND_COL_GAP + cols.y,
+		LEGEND_HEAD + float(rows) * LEGEND_ROW_H + LEGEND_PAD)
+
+func _draw_legend() -> void:
+	var rect := legend_rect()
+	var cols := _legend_col_widths()
+	var lx := rect.position.x
+	var ly := rect.position.y
+	var ink := Color(0.11, 0.11, 0.11)
+	var body := Color(0.13, 0.13, 0.13)
 
 	var box := StyleBoxFlat.new()
-	box.bg_color = Color(1, 1, 1, 0.90)
+	# 面板会浮在棋盘左上角那一小块上（两列比原来一列宽，1280×720 下右缘到 282，
+	# 而棋盘最左边那个地块的左缘在 242）。不透明度给到 0.98 —— 0.94 时底下的
+	# 港口牌会透出来变成一层"重影"，比直接盖住更难看。
+	box.bg_color = Color(1, 1, 1, 0.98)
 	box.border_color = Color(0.15, 0.15, 0.15, 0.22)
 	box.set_border_width_all(1)
 	box.set_corner_radius_all(10)
-	draw_style_box(box, Rect2(LEGEND_X, LEGEND_Y, LEGEND_W, total_h))
+	# 展开时才浮在棋盘上，加一点投影把它和底下的海色 / 地块分开
+	box.shadow_color = Color(0, 0, 0, 0.20)
+	box.shadow_size = 8
+	draw_style_box(box, rect)
 
-	draw_string(font, Vector2(LEGEND_X + 12.0, LEGEND_Y + 21.0), "地形图例",
-		HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.11, 0.11, 0.11))
+	var ax := lx + LEGEND_PAD
+	var bx := lx + LEGEND_PAD + cols.x + LEGEND_COL_GAP
+	draw_string(font, Vector2(ax, ly + LEGEND_HDR_DY), LEGEND_HDR_TERRAIN,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 13, ink)
+	draw_string(font, Vector2(bx, ly + LEGEND_HDR_DY), LEGEND_HDR_COST,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 13, ink)
 
-	for i in terrains.size():
-		var t: int = terrains[i]
-		var cy := LEGEND_Y + 38.0 + float(i) * LEGEND_ROW_H + LEGEND_ROW_H * 0.5
-		var cx := LEGEND_X + 24.0
-		_draw_legend_hex(Vector2(cx, cy), LEGEND_HEX_R, _terrain_color(t), _terrain_texture(t))
+	# ---- 左列：地形 -> 资源 ----
+	for i in LEGEND_TERRAINS.size():
+		var t: int = LEGEND_TERRAINS[i]
+		var cy := _legend_row_y(ly, i)
+		var hx := ax + LEGEND_HEX_R
+		_draw_legend_hex(Vector2(hx, cy), LEGEND_HEX_R, _terrain_color(t), _terrain_texture(t))
+		draw_string(font, Vector2(hx + LEGEND_HEX_R + LEGEND_HEX_GAP, cy + 4.5),
+			_legend_terrain_label(t), HORIZONTAL_ALIGNMENT_LEFT, -1, LEGEND_FS, body)
 
-		var r: int = Res.TERRAIN_RES.get(t, -1)
-		var label: String = Res.TERRAIN_CN[t] + (" · " + Res.R_NAMES_CN[r] if r >= 0 else " · 无产出")
-		draw_string(font, Vector2(cx + 20.0, cy + 4.5), label,
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.13, 0.13, 0.13))
+	# ---- 右列：建造花费 ----
+	var rows := _legend_cost_rows()
+	var cost_x := bx + _legend_name_w() + LEGEND_NAME_GAP
+	for i in rows.size():
+		var row: Array = rows[i]
+		var cy := _legend_row_y(ly, i)
+		draw_string(font, Vector2(bx, cy + 4.5), row[0],
+			HORIZONTAL_ALIGNMENT_LEFT, -1, LEGEND_FS, ink)
+		draw_string(font, Vector2(cost_x, cy + 4.5), _legend_cost_text(row[1]),
+			HORIZONTAL_ALIGNMENT_LEFT, -1, LEGEND_FS, body)
+
+## 第 i 行的行心 y。两列共用，保证横向上两列互相看齐。
+func _legend_row_y(top: float, i: int) -> float:
+	return top + LEGEND_HEAD + float(i) * LEGEND_ROW_H + LEGEND_ROW_H * 0.5
 
 func _draw_legend_hex(c: Vector2, r: float, col: Color, tex: Texture2D = null) -> void:
 	var pts := PackedVector2Array()
@@ -439,31 +640,53 @@ func _draw_tokens() -> void:
 			for i in k:
 				draw_circle(Vector2(x0 + i * gap, c.y + r * 0.50), rr, ink)
 
+## 港口牌中心 = 「这条边的中点」沿**该边的外法线**外推 PORT_OUT。
+##
+## ⚠️ 不能用"棋盘中心 -> 边中点"的**径向**代替法线。两者只有在边恰好垂直于半径时
+## 才重合；岛屿外缘那 9 条港口边的实测夹角是 23.4° 或 49.1°，按径向摆会让牌子
+## 从边中线偏出去最多 0.38 世界单位（62px/单位下 ≈ 24px）——
+## 看上去就是"港口牌没对准它那条边"。tools/probe_ports.gd 量过这个偏差。
+##
+## 外法线 = 边的垂线里背离棋盘中心的那一条。港口边全在岛屿外缘，
+## 用径向点乘判个正负就够，不必去查每条边归属哪个地块。
+func port_marker_pos(eid: int) -> Vector2:
+	var e: Vector2i = topo.edges[eid]
+	var a: Vector2 = topo.vertices[e.x]
+	var b: Vector2 = topo.vertices[e.y]
+	var mid: Vector2 = (a + b) * 0.5
+	var n := Vector2(-(b.y - a.y), b.x - a.x).normalized()
+	if n.dot(mid) < 0.0:
+		n = -n
+	return _p(mid + n * PORT_OUT)
+
+## 港口牌上写什么：通用 3:1 港只写「?」，指定资源港只写一个字的资源短名。
+## 比例（3:1 / 2:1）老玩家都知道，写在牌上又挤又占地方，省掉。
+## 短名直接取 HUD / 图例同款的 `UIPalette.RES_SHORT`，不另抄一份。
+func port_label(ptype: int) -> String:
+	if ptype == Res.Port.GENERIC_3:
+		return "?"
+	return UIPalette.RES_SHORT[ptype - 1]
+
 func _draw_ports() -> void:
+	var side := px_per_unit * PORT_BOX
 	for eid in board.port_edges:
 		var e: Vector2i = topo.edges[eid]
-		var mid: Vector2 = (topo.vertices[e.x] + topo.vertices[e.y]) * 0.5
-		var pos := _p(mid + mid.normalized() * PORT_OUT)
 		var ptype: int = board.vertex_port[e.x]
+		var pos := port_marker_pos(eid)
 
-		var label := "3:1"
 		var ink := Color(0.10, 0.10, 0.10)
 		var box := _port_box.duplicate() as StyleBoxFlat
 		if ptype != Res.Port.GENERIC_3:
-			# 仅靠底色区分 2:1 港口的资源不明显，直接写明资源：木x2 : 1
-			label = "%sx2 : 1" % Res.R_NAMES_CN[ptype - 1].left(1)
-			var rc := _res_color(ptype - 1).darkened(0.35)
-			box.bg_color = rc
+			# 底色仍按资源上色：牌面只有一个字时，底色是最快的识别通道
+			box.bg_color = _res_color(ptype - 1).darkened(0.35)
 			box.border_color = Color(1, 1, 1, 0.75)
 			ink = Color(1, 1, 1)
-		var fs := int(px_per_unit * 0.28 * 0.60)
-		var ts := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
-		var h := px_per_unit * 0.28
-		var w := maxf(px_per_unit * 0.54, ts.x + h * 0.55)
-		var rect := Rect2(pos - Vector2(w, h) * 0.5, Vector2(w, h))
-		draw_style_box(box, rect)
 
-		draw_string(font, pos + Vector2(-ts.x * 0.5, fs * 0.34),
+		var label := port_label(ptype)
+		var fs := int(side * 0.66)
+		var ts := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
+		draw_style_box(box, Rect2(pos - Vector2(side, side) * 0.5, Vector2(side, side)))
+		draw_string(font, pos + Vector2(-ts.x * 0.5, fs * 0.36),
 			label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, ink)
 
 func _draw_vertices() -> void:

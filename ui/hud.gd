@@ -481,15 +481,28 @@ func _build() -> void:
 ## 1280×720（设计分辨率）下与旧版绝对坐标逐像素一致；
 ## 手机横屏更宽时多出来的宽度全部留在棋盘那侧、由海色填充，
 ## 面板不会被甩在中间。
+##
+## 手机端还要再让开**安全区**：面板底色照旧铺到屏幕边（不然右缘会露出海色），
+## 但按钮和文字得躲开屏幕圆角与右侧的挖孔摄像头 —— 那两样都会盖住内容。
+## 桌面端算出来的安全区是 0，所以这里的分支对桌面完全无感。
 func _apply_layout() -> void:
 	var vp := get_viewport().get_visible_rect().size
+	var ins := SafeArea.insets()
 	var x := vp.x - PANEL_W
 	_bg.position = Vector2(x, 0)
 	_bg.size = Vector2(PANEL_W, vp.y)
 	_sep.position = Vector2(x, 0)
 	_sep.size = Vector2(1.5, vp.y)
-	_box.position = Vector2(x + 14, 12)
-	_box.size = Vector2(PANEL_W - 28, vp.y - 24)
+	var r := content_rect(vp, ins)
+	_box.position = r.position
+	_box.size = r.size
+
+## 面板**内容**（按钮 / 文字 / 日志）所占的区域。
+## 抽成静态纯函数纯粹是为了能 headless 单测：真机上的挖孔尺寸没法在 CI 里复现，
+## 只有把算式拆出来，"内容右缘不越过安全区"才守得住。
+static func content_rect(vp: Vector2, ins: Vector4) -> Rect2:
+	return Rect2(vp.x - PANEL_W + 14, 12 + ins.y,
+		PANEL_W - 28 - ins.z, vp.y - 24 - ins.y - ins.w)
 
 func _make_player_row(pid: int) -> Control:
 	var frame := PanelContainer.new()
