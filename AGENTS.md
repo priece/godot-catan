@@ -33,6 +33,20 @@ GODOT=/Applications/Godot.app/Contents/MacOS/Godot   # macOS
 $GODOT --path .
 ```
 
+### Run the game in portrait (phone layout)
+
+```bash
+./portrait_start.sh                  # macOS / Linux: window 720×1280 → portrait branch
+./portrait_start.sh -- auto          # AI takes the human seat (auto demo)
+PORTRAIT_RES=1080x1920 ./portrait_start.sh   # another portrait size
+# Windows: portrait_start.bat (same flags, exe expected one level above the repo)
+```
+
+Both launchers do exactly one meaningful thing: pass `--resolution <WxH>` with **W < H**, which is
+what `BoardView._ready` keys off. `portrait_start.sh` additionally falls back through
+`$GODOT_BIN` / `$GODOT` / `./Godot.app` / `/Applications/Godot.app` / `PATH`, and runs `--import`
+once if `.godot/` is missing. Keep the two launchers' flags in sync.
+
 ### Import (needed after adding scripts, to register `class_name`)
 
 ```bash
@@ -332,6 +346,23 @@ Read this section before debugging anything UI- or generation-related.
 20. **Godot's `is_equal_approx` takes no tolerance argument** (1 arg on Vector2/Rect2, 2 as a global).
     A third "tolerance" argument is a parse error, not a warning. Write `absf(a - b) <= tol` yourself.
 
+21. **In shell scripts, brace every variable that is followed by a Chinese character.** macOS bash 3.2
+    treats the UTF-8 bytes of `（` as part of the identifier, so `echo "分辨率 $RES（宽<高）"` dies with
+    `RES<mojibake>: unbound variable` under `set -u` — and the error text itself is garbled. Write
+    `${RES}`. This bit `portrait_start.sh` on its very first run; it will bite any launcher that prints
+    Chinese labels next to a value.
+
+22. **The two roads from a Road Building card are NOT required to touch your network** (official rule,
+    FAQ-backed). `Rules.valid_road_edges(st, pid, is_setup, anchor, free_placement)` grows a 5th argument
+    for exactly this: `free_placement = true` returns **every empty edge** and is meant to be passed when
+    `st.free_roads_remaining > 0`. Paid roads keep the "must extend my network" requirement, setup roads
+    keep the anchor requirement — passing the wrong flag silently changes a rule instead of crashing.
+    Consequences that look like bugs but are correct: a free road may sit in the middle of nowhere, the
+    second free road need not touch the first, and **a settlement can be built on the endpoint of that
+    isolated road** (settlements only require a vertex adjacent to one of *your own* roads, which is what
+    `vertex_connected_to_network` checks — it never walks back to your main network). Do not "fix" the
+    isolated road away. `test_rules.gd::_test_road_building_free` pins all of it down.
+
 ---
 
 ## Definition of done
@@ -341,7 +372,7 @@ Before considering a change complete, run these and make sure they are green:
 | Command | Expected |
 |---|---|
 | `verify_topology.gd` | `TOPOLOGY OK` |
-| `test_rules.gd` | `通过 46 · 失败 0` / PASS |
+| `test_rules.gd` | `通过 62 · 失败 0` / PASS（含修路卡免费路「可凭空放 + 孤立路端可建村」） |
 | `test_trade_dialog.gd` | `通过 24 · 失败 0` / PASS |
 | `test_dev_dialog.gd` | `通过 56 · 失败 0` / PASS（含 begin_turn 与 start_turn+roll_dice 骰子序列一致） |
 | `test_seed.gd` | all checks pass |
