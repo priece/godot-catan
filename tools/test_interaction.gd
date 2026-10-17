@@ -27,6 +27,8 @@ var preroll_turns := 0        ## 出现次数
 var preroll_dev := 0          ## 在其中打出的发展卡数
 var preroll_knight := 0       ## 其中打出骑士的次数
 var preroll_robber := 0       ## 掷骰前打骑士后放强盗的次数
+var preroll_road_try := 0     ## 掷骰前打出修路卡的次数
+var preroll_road_ok := 0      ## 其中真的立刻放下一条免费路的次数
 var dice_ok := true           ## 主阶段时骰子必须已经掷过
 
 func _initialize() -> void:
@@ -54,7 +56,10 @@ func _on_frame() -> void:
 		if not _grab():
 			return
 		director.ai_delay = 0.01   # 让 AI 快速推进，测试不必等演出
-		print("OK 主场景装配完成，开始模拟点击")
+		# 强制覆盖一条容易漏的路径：修路卡的免费路必须「打出即刻放」，掷骰前就能放。
+		# 不注入的话，这副随机牌里未必抽得到修路卡，这段验收就形同虚设。
+		director.ctl.st.players[0].dev_cards.append(Res.Dev.ROAD_BUILDING)
+		print("OK 主场景装配完成，开始模拟点击（已注入 1 张修路卡覆盖免费路路径）")
 	if frames > max_frames:
 		_finish()
 		return
@@ -172,6 +177,19 @@ func _preroll_step() -> void:
 					if r < 0:
 						break
 					hud.play_dev_pressed.emit(card, -1, r, r)
+				Res.Dev.ROAD_BUILDING:
+					# 修路卡：打完应当「立刻」能放路，哪怕还在掷骰前的窗口里。
+					# 免费路不受"必须连路网"限制，所以候选是全部空边。
+					preroll_road_try += 1
+					hud.play_dev_pressed.emit(card, -1, -1, -1)
+					var free_edges := Rules.valid_road_edges(st, 0, false, -1, true)
+					if not free_edges.is_empty():
+						var roads_before: int = st.players[0].roads.size()
+						board.edge_clicked.emit(free_edges[0])
+						clicks += 1
+						if st.players[0].roads.size() == roads_before + 1:
+							preroll_road_ok += 1
+					return
 				_:
 					hud.play_dev_pressed.emit(card, -1, -1, -1)
 			clicks += 1
@@ -239,8 +257,9 @@ func _try_human_build() -> void:
 		human_builds += 1
 		return
 
-	var edges := Rules.valid_road_edges(st, 0, false)
-	if not edges.is_empty() and (p.has(Res.COST_ROAD) or st.free_roads_remaining > 0):
+	var free_road := st.free_roads_remaining > 0
+	var edges := Rules.valid_road_edges(st, 0, false, -1, free_road)
+	if not edges.is_empty() and (p.has(Res.COST_ROAD) or free_road):
 		board.edge_clicked.emit(edges[0])
 		human_builds += 1
 		return
@@ -303,10 +322,14 @@ func _finish() -> void:
 	print("人类成功建造次数: %d" % human_builds)
 	print("掷骰前窗口     : 出现 %d 次 · 打出发展卡 %d 次（骑士 %d 次，其后放强盗 %d 次）"
 		% [preroll_turns, preroll_dev, preroll_knight, preroll_robber])
+	if preroll_road_try > 0:
+		print("修路卡（掷骰前）: 打出 %d 次 · 打完立刻放下路 %d 次" % [preroll_road_try, preroll_road_ok])
 	if not dice_ok:
 		print("!! 出现未掷骰就进入主阶段的回合")
 	if preroll_knight > 0 and preroll_robber < preroll_knight:
 		print("!! 掷骰前打出的骑士没能走完放强盗流程")
+	if preroll_road_ok < preroll_road_try:
+		print("!! 掷骰前打出的修路卡没能立刻放路")
 	print("帧数 / 轮数    : %d / %d" % [frames, st.round])
 	print("强盗最终位置   : 地块 %d（初始在 %d）" % [st.board.robber_hex, _desert_hex()])
 	if st.winner >= 0:
@@ -324,7 +347,7 @@ func _finish() -> void:
 			errs.append("资源不守恒：%s 共 %d 张（应 19）" % [Res.R_NAMES_CN[r], total])
 
 	var ok := errs.is_empty() and st.winner >= 0 and human_builds > 0 and dice_ok \
-		and preroll_robber >= preroll_knight
+		and preroll_robber >= preroll_knight and preroll_road_ok >= preroll_road_try
 
 	# 日志必须是全量的：最早那条（"新开一局…"）不能被截掉
 	var log_text: String = hud._log.text

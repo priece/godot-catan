@@ -92,7 +92,14 @@ static func valid_settlement_vertices(st: GameState, pid: int, is_setup: bool) -
 	return out
 
 ## 可放道路的边。setup=true 时必须贴着 anchor 顶点。
-static func valid_road_edges(st: GameState, pid: int, is_setup: bool, anchor: int = -1) -> Array[int]:
+##
+## free_placement=true 表示**修路卡给的那 2 条免费路**：按官方规则，它们可以
+## 凭空放在任意空边上，不要求连到自己的路网（两条之间也不要求互连）。
+## 放下去之后这条路就是你的合法道路 —— 因此它的端点也能用来建村庄，
+## 因为建村只要求"顶点贴着自己的一条路"（见 vertex_connected_to_network）。
+## 付费修路仍然必须延伸自己的路网，所以默认值是 false。
+static func valid_road_edges(st: GameState, pid: int, is_setup: bool, anchor: int = -1,
+		free_placement: bool = false) -> Array[int]:
 	var out: Array[int] = []
 	var p: PlayerState = st.players[pid]
 	if not road_piece_left(p):
@@ -105,6 +112,8 @@ static func valid_road_edges(st: GameState, pid: int, is_setup: bool, anchor: in
 		if is_setup:
 			if anchor >= 0 and (e.x == anchor or e.y == anchor):
 				out.append(eid)
+		elif free_placement:
+			out.append(eid)
 		else:
 			if vertex_connected_to_network(st, pid, e.x) or vertex_connected_to_network(st, pid, e.y):
 				out.append(eid)

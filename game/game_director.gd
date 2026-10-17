@@ -371,6 +371,11 @@ func _on_edge_clicked(e: int) -> void:
 			if ctl.setup_apply(e):
 				board.redraw()
 				_enter_setup()
+		S.HUMAN_PREROLL:
+			# 修路卡的免费路：打出即刻放，不必等掷骰
+			if ctl.st.free_roads_remaining > 0:
+				if ctl.apply_action(HUMAN, {"type": Res.A_PLACE_ROAD, "edge": e}):
+					_after_human_action()
 		S.HUMAN_TURN:
 			if ctl.apply_action(HUMAN, {"type": Res.A_PLACE_ROAD, "edge": e}):
 				_after_human_action()
@@ -439,11 +444,19 @@ func _update_highlights() -> void:
 			if me.has(Res.COST_CITY):
 				vs.append_array(Rules.valid_city_vertices(ctl.st, HUMAN))
 			if me.has(Res.COST_ROAD) or ctl.st.free_roads_remaining > 0:
-				es = Rules.valid_road_edges(ctl.st, HUMAN, false)
+				# 手上还有修路卡的免费路时，任意空边都合法（官方规则）。
+				es = Rules.valid_road_edges(ctl.st, HUMAN, false, -1, ctl.st.free_roads_remaining > 0)
 			board.set_pick_mode(BoardView.Pick.ANY)
-		S.HUMAN_PREROLL, _:
-			# 掷骰前不能点棋盘：建造、交易按官方规则都在产出之后，
+		S.HUMAN_PREROLL:
+			# 掷骰前一般不开放棋盘：建造、交易按官方规则都在产出之后，
 			# 这里放开会让玩家在没拿到资源前先偷建。
+			# 唯一的例外是修路卡 —— 它的 2 条路是「打出即刻放置」，必须现在就能点。
+			if ctl.st.free_roads_remaining > 0:
+				es = Rules.valid_road_edges(ctl.st, HUMAN, false, -1, true)
+				board.set_pick_mode(BoardView.Pick.EDGE)
+			else:
+				board.set_pick_mode(BoardView.Pick.NONE)
+		_:
 			board.set_pick_mode(BoardView.Pick.NONE)
 	board.set_highlights(vs, es, hs)
 
@@ -462,9 +475,13 @@ func _status_text() -> String:
 		S.ROBBER_AI:
 			return "%s 正在移动强盗…" % _who(ctl.st.current)
 		S.HUMAN_PREROLL:
+			if ctl.st.free_roads_remaining > 0:
+				return "修路卡：还剩 %d 条免费路 —— 点任意空边放下（不必连到你的路网），放完再掷骰" % ctl.st.free_roads_remaining
 			return "轮到你了：先「掷骰子」，或打出 1 张发展卡（本回合只能打 1 张，打出后仍需掷骰）"
 		S.HUMAN_TURN:
 			var me: PlayerState = ctl.st.players[HUMAN]
+			if ctl.st.free_roads_remaining > 0:
+				return "修路卡：还剩 %d 条免费路 —— 点任意空边放下（不必连到你的路网）" % ctl.st.free_roads_remaining
 			var can_build := me.has(Res.COST_SETTLEMENT) or me.has(Res.COST_CITY) \
 				or me.has(Res.COST_ROAD) or ctl.st.free_roads_remaining > 0
 			if not can_build:

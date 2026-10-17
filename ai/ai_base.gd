@@ -178,9 +178,9 @@ func choose_action(st: GameState) -> Dictionary:
 	if not dev_action.is_empty() and not _is_blocked(dev_action):
 		options.append(dev_action)
 
-	# 免费道路（修路卡）优先用掉，别浪费
+	# 免费道路（修路卡）优先用掉，别浪费。这些路可以凭空放，所以候选是全部空边。
 	if st.free_roads_remaining > 0:
-		var free_edges := Rules.valid_road_edges(st, pid, false)
+		var free_edges := Rules.valid_road_edges(st, pid, false, -1, true)
 		if not free_edges.is_empty():
 			options.append({
 				"type": Res.A_PLACE_ROAD,
@@ -334,9 +334,11 @@ func _choose_dev_play(st: GameState) -> Dictionary:
 		if rng.randf() < 0.25 * savvy:
 			return {"type": Res.A_PLAY_DEV, "card": Res.Dev.KNIGHT, "score": 60.0}
 
-	# 修路卡：手上还有路可放才值得打
+	# 修路卡：还有路片 + 有空边就值得打（免费路不受"必须连路网"限制）
 	if p.dev_cards.has(Res.Dev.ROAD_BUILDING):
-		if st.free_roads_remaining > 0 or Rules.valid_road_edges(st, pid, false).size() >= 2:
+		var pieces := Res.LIMIT_ROAD - p.roads.size()
+		if pieces > 0 and (st.free_roads_remaining > 0 \
+				or Rules.valid_road_edges(st, pid, false, -1, true).size() >= mini(2, pieces)):
 			return {"type": Res.A_PLAY_DEV, "card": Res.Dev.ROAD_BUILDING, "score": 160.0}
 
 	# 垄断：挑对手手上最多的资源

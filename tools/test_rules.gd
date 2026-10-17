@@ -20,6 +20,7 @@ func _initialize() -> void:
 	_test_discard_threshold()
 	_test_port_rates()
 	_test_dev_card_timing()
+	_test_road_building_free()
 	_test_bank_trade()
 	print("")
 	print("通过 %d · 失败 %d" % [_pass, _fail])
@@ -252,6 +253,101 @@ func _test_dev_card_timing() -> void:
 	p.dev_cards.append_array(p.fresh_dev_cards)
 	p.fresh_dev_cards.clear()
 	_ok(Rules.playable_dev_cards(p).has(Res.Dev.KNIGHT), "下回合起可打")
+
+# ================= 修路卡：免费路可以凭空放 =================
+
+## 官方规则：修路卡的那 2 条路不受"必须连到自己的路网"限制，可以放在任意空边上；
+## 放下去之后它们就是自己的合法道路，因此**孤立路端也能建村庄**。
+func _test_road_building_free() -> void:
+	print("\n-- 修路卡：免费路可以凭空放、孤立路端能建村 --")
+	var ctl := _fresh_game(4, 9091)
+	ctl.run_setup()
+	var st := ctl.st
+	var p: PlayerState = st.players[0]
+	var topo := ctl.topo
+
+	# 挑一条空边：两端都不挨着玩家 0 的路网，且至少一端满足距离规则（能建村）
+	var isolated := -1
+	var build_v := -1
+	for eid in topo.edges.size():
+		if Rules.edge_has_road(st, eid):
+			continue
+		var e: Vector2i = topo.edges[eid]
+		if Rules.vertex_connected_to_network(st, 0, e.x) or Rules.vertex_connected_to_network(st, 0, e.y):
+			continue
+		for cand in [e.x, e.y]:
+			if Rules.distance_rule_ok(st, cand):
+				isolated = eid
+				build_v = cand
+				break
+		if isolated >= 0:
+			break
+	_ok(isolated >= 0, "棋盘上存在与玩家 0 路网无关的空边")
+
+	_ok(not Rules.valid_road_edges(st, 0, false).has(isolated),
+		"付费修路：孤立边不合法（必须延伸自己的路网）")
+	_ok(Rules.valid_road_edges(st, 0, false, -1, true).has(isolated),
+		"修路卡免费路：孤立边合法")
+
+	ctl.start_turn(0)
+	p.dev_cards.append(Res.Dev.ROAD_BUILDING)
+	_ok(ctl.apply_action(0, {"type": Res.A_PLAY_DEV, "card": Res.Dev.ROAD_BUILDING}),
+		"修路卡可以打出")
+	_ok(st.free_roads_remaining == 2, "打出后有 2 条免费路", "实际 %d" % st.free_roads_remaining)
+
+	# 第一条：凭空放在孤立空边上
+	_ok(ctl.apply_action(0, {"type": Res.A_PLACE_ROAD, "edge": isolated}),
+		"免费路可以放在与路网无关的空边上")
+	_ok(p.roads.has(isolated), "这条孤立的免费路算作自己的道路")
+	_ok(st.free_roads_remaining == 1, "免费路计数减 1", "实际 %d" % st.free_roads_remaining)
+
+	# 孤立路端建村：只需要贴着自己的路 + 满足距离规则
+	_ok(Rules.valid_settlement_vertices(st, 0, false).has(build_v),
+		"孤立免费路的端点可以建村庄")
+	p.resources = [9, 9, 9, 9, 9]
+	_ok(ctl.apply_action(0, {"type": Res.A_PLACE_SETTLEMENT, "vertex": build_v}),
+		"孤立路端建村真的能落地（付得起资源时）")
+
+	# 第二条：另一条同样孤立的空边（不要求与第一条相连）
+	var isolated2 := -1
+	for eid in topo.edges.size():
+		if eid == isolated or Rules.edge_has_road(st, eid):
+			continue
+		var e2: Vector2i = topo.edges[eid]
+		if Rules.vertex_connected_to_network(st, 0, e2.x) or Rules.vertex_connected_to_network(st, 0, e2.y):
+			continue
+		isolated2 = eid
+		break
+	_ok(isolated2 >= 0, "还剩另一条与路网无关的空边")
+	_ok(ctl.apply_action(0, {"type": Res.A_PLACE_ROAD, "edge": isolated2}),
+		"第二条免费路也不必与第一条相连")
+	_ok(st.free_roads_remaining == 0, "2 条免费路用完", "实际 %d" % st.free_roads_remaining)
+
+	# 免费路用完后，孤立边重新变成非法（付费规则必须回来）
+	var another := -1
+	for eid in topo.edges.size():
+		if Rules.edge_has_road(st, eid):
+			continue
+		var e3: Vector2i = topo.edges[eid]
+		if not Rules.vertex_connected_to_network(st, 0, e3.x) \
+				and not Rules.vertex_connected_to_network(st, 0, e3.y):
+			another = eid
+			break
+	if another >= 0:
+		_ok(not Rules.valid_road_edges(st, 0, false).has(another),
+			"免费路用完后，付费修路又必须连路网")
+		_ok(not ctl.apply_action(0, {"type": Res.A_PLACE_ROAD, "edge": another}),
+			"绕过规则层直接点孤立边也放不下")
+
+	# 路片用完（15 条）时，连免费路都没有位置
+	var saved: Array[int] = []
+	saved.assign(p.roads)
+	p.roads.clear()
+	for i in Res.LIMIT_ROAD:
+		p.roads.append(100000 + i)
+	_ok(Rules.valid_road_edges(st, 0, false, -1, true).is_empty(),
+		"15 条路片用完后，修路卡的免费路同样没有位置")
+	p.roads.assign(saved)
 
 # ================= 银行交易 =================
 

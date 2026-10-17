@@ -339,9 +339,12 @@ func apply_action(pid: int, action: Dictionary) -> bool:
 
 		Res.A_PLACE_ROAD:
 			var e: int = action.get("edge", -1)
-			if not Rules.valid_road_edges(st, pid, false).has(e):
+			# 修路卡的免费路可以凭空放（官方规则，不要求连路网），
+			# 所以候选集要跟着换 —— 付费路仍然必须延伸自己的路网。
+			var is_free := st.free_roads_remaining > 0
+			if not Rules.valid_road_edges(st, pid, false, -1, is_free).has(e):
 				return false
-			if st.free_roads_remaining > 0:
+			if is_free:
 				st.free_roads_remaining -= 1
 			else:
 				if not p.has(Res.COST_ROAD):
@@ -422,7 +425,7 @@ func _play_dev_card(pid: int, action: Dictionary) -> bool:
 			p.dev_cards.erase(card)
 			st.dev_played_this_turn = true
 			st.free_roads_remaining += 2
-			st.log_line("%s 打出修路卡，可免费放 2 条路" % _pn(pid))
+			st.log_line("%s 打出修路卡，可免费放 2 条路（任意空边，不必连到自己的路网）" % _pn(pid))
 			return true
 
 		Res.Dev.YEAR_OF_PLENTY:
