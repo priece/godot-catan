@@ -70,5 +70,26 @@ func _initialize() -> void:
 		print("[换算]   视口->窗口倍率 = %.4f × %.4f（trap 3：涉鼠标测试必须窗口=基准，否则点偏）" % [
 			float(win_sz.x) / vp.x, float(win_sz.y) / vp.y])
 
+	# ---------- P1 §4.4：写 content_scale_size 后，size_changed 第几帧触发、
+	# 新 vp 第几帧生效（决定 shot_portrait.gd 要等几帧）。跑法：
+	#   Godot --path . --resolution 720x1280 --script res://tools/probe_display.gd -- css
+	if OS.get_cmdline_user_args().has("css"):
+		await _probe_css_timing()
+
 	print("== 探针结束 ==")
 	quit(0)
+
+var _frame_no := 0
+
+func _probe_css_timing() -> void:
+	var win: Window = root
+	_frame_no = 0
+	win.size_changed.connect(func():
+		print("[css] frame %d: size_changed 触发（此刻 vp=%s）" % [_frame_no, win.get_visible_rect().size]))
+	print("[css] 写入前 content_scale_size=%s vp=%s —— 现在写入 720×1280" % [
+		win.content_scale_size, win.get_visible_rect().size])
+	win.content_scale_size = Vector2i(720, 1280)
+	for i in 5:
+		await process_frame
+		_frame_no += 1
+		print("[css] frame %d: vp=%s css=%s" % [_frame_no, win.get_visible_rect().size, win.content_scale_size])

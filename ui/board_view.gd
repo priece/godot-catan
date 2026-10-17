@@ -132,6 +132,13 @@ var _help_hover := false        ## 鼠标/手指是否悬在左上角"?"按钮�
 var _ins := Vector4.ZERO
 
 func _ready() -> void:
+	# 竖屏判定：按**窗口物理尺寸**锁一次朝向（此刻视口还没和基准对齐，读视口会判错，
+	# P0 探针实测），并一次性把内容基准切到 720×1280（D5：先比现值，不同才写，
+	# 少一次无谓的 size_changed → 全屏重排）。
+	Layout.set_portrait(Layout.is_portrait_for_window(DisplayServer.window_get_size()))
+	var css := Layout.content_scale_for(Layout.is_portrait())
+	if get_window().content_scale_size != css:
+		get_window().content_scale_size = css
 	topo = BoardTopology.instance()
 	font = _cjk_font()
 	_port_box = StyleBoxFlat.new()
@@ -164,6 +171,10 @@ func _on_viewport_changed() -> void:
 ## 按当前视口重排棋盘：水平在"视口扣掉右侧信息面板"的区域里居中，
 ## 垂直在视口中居中。1280×720 桌面下结果为 (510, 360)，与旧版一致。
 func _fit_to_viewport() -> void:
+	# 竖屏：棋盘缩放进分区算出来的棋盘区（D3：px_per_unit 只在竖屏分支写回，
+	# 横屏永不覆写，保持 @export 单一真源）。
+	if Layout.is_portrait():
+		px_per_unit = Layout.px_per_unit_for(Layout.board_rect(get_viewport_rect().size, _ins))
 	board_origin = board_origin_for(get_viewport_rect().size, _ins)
 	queue_redraw()
 
@@ -173,7 +184,12 @@ func _fit_to_viewport() -> void:
 ## 抽成静态纯函数是为了能 headless 单测：真机上视口 / 挖孔都不可控，
 ## 只有把算式拆出来，才守得住"1280×720 桌面下仍必须是 (510, 360)"。
 static func board_origin_for(vp: Vector2, ins: Vector4) -> Vector2:
+	if Layout.is_portrait():
+		# 竖屏不叠加 BOARD_X_BIAS —— 那是"给左上角按钮腾地方"的横屏补偿（D4）。
+		return Layout.board_rect(vp, ins).get_center()
 	var left := ins.x
+	# ⚠️ 横屏右界不减 ins.z 是既有行为：test_safe_area 的 (510,360) 与
+	# "左挖孔 44 → x=532"两条断言都依赖它，别"顺手修"。
 	var right := vp.x - HUD.PANEL_W
 	return Vector2((left + right) * 0.5 + BOARD_X_BIAS, (ins.y + vp.y - ins.w) * 0.5)
 
