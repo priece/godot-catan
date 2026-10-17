@@ -108,6 +108,14 @@ var _yop_sel: Array = [-1, -1]
 var _log_title: Label
 var _log: RichTextLabel
 
+## 日志弹窗（仅竖屏创建，D7；横屏这三个成员为 null）：
+## 竖屏面板高度有限，日志收成「查看日志（N 条）」按钮 + 全屏弹窗；
+## 横屏日志照旧内嵌在 _box 里。Esc 链 / set_log / on_new_game 全靠 null 守卫，
+## 桌面（无弹窗）零分支 —— 与 _yop_dlg 等四层弹窗同一套路。
+var _log_dlg: Control
+var _log_card: PanelContainer
+var _btn_log: Button
+
 var _trade_sig := ""
 var _dev_sig := ""
 
@@ -335,6 +343,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			# "焦点跑到别处（比如点了快捷按钮）后按回车"的情况。
 			_fire_restart()
 			get_viewport().set_input_as_handled()
+	elif _log_dlg != null and _log_dlg.visible:
+		# 日志弹窗层紧跟重开弹窗（D6）。重开弹窗是全屏遮罩，打开时点不到面板
+		# 按钮，两者不会真叠在一起；null 守卫保证桌面（无此弹窗）零分支。
+		if event.keycode == KEY_ESCAPE:
+			close_log_dialog()
+			get_viewport().set_input_as_handled()
 	elif _yop_dlg != null and _yop_dlg.visible:
 		# 弹窗可能叠着开（选卡 → 丰收），Esc 只关最上面那层，底下的选卡弹窗留着
 		if event.keycode == KEY_ESCAPE:
@@ -370,6 +384,7 @@ func on_new_game(cur_seed: int) -> void:
 	_log_last = ""
 	_cur_seed = cur_seed
 	close_dialog()
+	close_log_dialog()
 	close_trade_dialog()
 	close_dev_dialog()
 	close_mono_dialog()
@@ -452,30 +467,20 @@ func _build() -> void:
 	_btn_trade.pressed.connect(show_trade_dialog)
 	_act_row.add_child(_btn_trade)
 
-	_log_title = _label("事件日志", 12, UIPalette.MUTED, true)
-	box.add_child(_log_title)
-	_log = RichTextLabel.new()
-	_log.bbcode_enabled = true
-	# 不做自动跟随：玩家往上翻看历史时，新事件不应该把他拽回底部。
-	# 只有当他本来就停在底部时才自动滚到最新（见 set_log）。
-	_log.scroll_following = false
-	_log.scroll_active = true
-	_log.selection_enabled = true
-	_log.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_log.custom_minimum_size = Vector2(0, 150)
-	_log.add_theme_font_size_override("normal_font_size", 12)
-	_log.add_theme_color_override("default_color", UIPalette.INK)
-	var lsb := StyleBoxFlat.new()
-	lsb.bg_color = Color(1, 1, 1)
-	lsb.border_color = Color(0.86, 0.85, 0.82)
-	lsb.set_border_width_all(1)
-	lsb.set_corner_radius_all(6)
-	lsb.content_margin_left = 8
-	lsb.content_margin_right = 8
-	lsb.content_margin_top = 6
-	lsb.content_margin_bottom = 6
-	_log.add_theme_stylebox_override("normal", lsb)
-	box.add_child(_log)
+	if Layout.is_portrait():
+		# 竖屏（D7）：面板高度有限，日志收成「查看日志」按钮 + 弹窗。
+		# 朝向在 BoardView._ready 已锁定（树序它先 ready），这里一次性分支即可，
+		# 运行中不需要 reparent。
+		_btn_log = _button("查看日志（0 条）")
+		_btn_log.tooltip_text = "事件只增不减，点开看全部历史"
+		_btn_log.pressed.connect(open_log_dialog)
+		box.add_child(_btn_log)
+		_build_log_dialog()
+	else:
+		_log_title = _label("事件日志", 12, UIPalette.MUTED, true)
+		box.add_child(_log_title)
+		_log = _make_log_view()
+		box.add_child(_log)
 
 ## 把面板钉在视口右缘，并让它随视口高度伸缩。
 ## 1280×720（设计分辨率）下与旧版绝对坐标逐像素一致；
@@ -488,6 +493,18 @@ func _build() -> void:
 func _apply_layout() -> void:
 	var vp := get_viewport().get_visible_rect().size
 	var ins := SafeArea.insets()
+	if Layout.is_portrait():
+		# 竖屏：信息区横贯屏宽、铺在棋盘下方（底色照旧铺到屏边，安全区只作用
+		# 于内容盒）；分隔线由竖条（1.5 宽）改横条（1.5 高）。
+		var pr := Layout.panel_rect(vp, ins)
+		_bg.position = pr.position
+		_bg.size = pr.size
+		_sep.position = pr.position
+		_sep.size = Vector2(pr.size.x, 1.5)
+		var r := content_rect(vp, ins)
+		_box.position = r.position
+		_box.size = r.size
+		return
 	var x := vp.x - PANEL_W
 	_bg.position = Vector2(x, 0)
 	_bg.size = Vector2(PANEL_W, vp.y)
@@ -501,6 +518,8 @@ func _apply_layout() -> void:
 ## 抽成静态纯函数纯粹是为了能 headless 单测：真机上的挖孔尺寸没法在 CI 里复现，
 ## 只有把算式拆出来，"内容右缘不越过安全区"才守得住。
 static func content_rect(vp: Vector2, ins: Vector4) -> Rect2:
+	if Layout.is_portrait():
+		return Layout.content_rect(vp, ins)
 	return Rect2(vp.x - PANEL_W + 14, 12 + ins.y,
 		PANEL_W - 28 - ins.z, vp.y - 24 - ins.y - ins.w)
 
@@ -631,7 +650,11 @@ func set_log(lines: Array[String]) -> void:
 	var stick := _at_log_bottom()
 	_log.text = "\n".join(lines)
 	_log_title.text = "事件日志（共 %d 条）" % lines.size()
-	if stick:
+	if _btn_log != null:
+		# 竖屏：按钮上的条数跟着日志走（横屏 _btn_log 为 null，零分支）
+		_btn_log.text = "查看日志（%d 条）" % lines.size()
+	# 弹窗开着时不存在"停在底部"一说 —— 玩家点开就是要看最新，强制滚到底。
+	if stick or (_log_dlg != null and _log_dlg.visible):
 		_scroll_log_to_end.call_deferred()
 
 func _at_log_bottom() -> bool:
@@ -644,6 +667,70 @@ func _at_log_bottom() -> bool:
 
 func _scroll_log_to_end() -> void:
 	_log.scroll_to_line(maxi(0, _log.get_line_count() - 1))
+
+## 日志视图本体。横屏内嵌 / 竖屏弹窗共用的样式与行为：
+## 不做自动跟随（玩家往上翻看历史时，新事件不应该把他拽回底部；
+## 只有当他本来就停在底部、或弹窗开着时才自动滚到最新，见 set_log）。
+func _make_log_view() -> RichTextLabel:
+	var log_view := RichTextLabel.new()
+	log_view.bbcode_enabled = true
+	log_view.scroll_following = false
+	log_view.scroll_active = true
+	log_view.selection_enabled = true
+	log_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	log_view.custom_minimum_size = Vector2(0, 150)
+	log_view.add_theme_font_size_override("normal_font_size", 12)
+	log_view.add_theme_color_override("default_color", UIPalette.INK)
+	var lsb := StyleBoxFlat.new()
+	lsb.bg_color = Color(1, 1, 1)
+	lsb.border_color = Color(0.86, 0.85, 0.82)
+	lsb.set_border_width_all(1)
+	lsb.set_corner_radius_all(6)
+	lsb.content_margin_left = 8
+	lsb.content_margin_right = 8
+	lsb.content_margin_top = 6
+	lsb.content_margin_bottom = 6
+	log_view.add_theme_stylebox_override("normal", lsb)
+	return log_view
+
+## 日志弹窗骨架（复用 _new_dialog 全屏遮罩 + 居中白卡片）。
+## ⚠️ 宽度先固定 560：plan-a §3 N1 把"弹窗宽度自适应"整体归到 P3，
+## 这里不碰横屏那四个弹窗的既有宽度（重开 320 / 垄断 400 / 选卡 430 / 兑换·丰收 470）。
+func _build_log_dialog() -> void:
+	var d := _new_dialog(560.0)
+	_log_dlg = d["dlg"]
+	_log_card = d["card"]
+	var box: VBoxContainer = d["box"]
+
+	_log_title = _label("事件日志", 12, UIPalette.MUTED, true)
+	box.add_child(_log_title)
+
+	_log = _make_log_view()
+	box.add_child(_log)
+
+	var close := _button("关闭", true)
+	close.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	close.pressed.connect(close_log_dialog)
+	box.add_child(close)
+
+## 打开日志弹窗。日志视图高度按**当前视口**的 ~80% 现算（标题 / 关闭按钮 /
+## 卡片内边距合计约 110），所以每次开都重设；高度变了要等一帧布局完再居中，
+## 否则 _center_card 读到的 combined minimum 还是旧值（见 _build_dialog 的注释）。
+func open_log_dialog() -> void:
+	if _log_dlg == null:
+		return
+	var vp := get_viewport().get_visible_rect().size
+	_log.custom_minimum_size = Vector2(0, clampf(vp.y * 0.8 - 110.0, 300.0, vp.y - 120.0))
+	await get_tree().process_frame
+	# 清掉上一次打开留下的实测尺寸，让居中严格按新内容高度重算
+	_log_card.size = Vector2(560.0, 0.0)
+	_log_dlg.visible = true
+	_center_card(_log_card, 560.0)
+	_scroll_log_to_end()
+
+func close_log_dialog() -> void:
+	if _log_dlg != null:
+		_log_dlg.visible = false
 
 func _res_bbcode(p: PlayerState) -> String:
 	var parts: Array[String] = []
