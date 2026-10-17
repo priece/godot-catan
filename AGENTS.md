@@ -49,6 +49,7 @@ $GODOT --headless --path . --script res://tools/test_dev_dialog.gd    # 56 dev-c
 $GODOT --headless --path . --script res://tools/test_seed.gd          # seed parsing + official number rules
 $GODOT --headless --path . --script res://tools/test_pick.gd          # touch picking, "vertex wins" geometry
 $GODOT --headless --path . --script res://tools/test_safe_area.gd     # safe-area insets + board/HUD layout math
+$GODOT --headless --path . --script res://tools/test_layout.gd         # portrait split math: board_rect / panel_rect / content_rect + desktop zero-drift
 $GODOT --headless --path . --script res://tools/test_legend.gd        # legend contents come from Res.COST_*, panel geometry
 $GODOT --headless --path . --script res://tools/test_ports.gd         # port badge wording + "centre sits on the edge's perpendicular bisector"
 $GODOT --headless --path . --script res://tools/sim_runner.gd -- 500  # 500-game batch, prints win-rate matrix
@@ -75,6 +76,7 @@ $GODOT --path . --resolution 1280x720 --script res://tools/shot_trade_dialog.gd
 $GODOT --path . --resolution 1280x720 --script res://tools/shot_dev_dialog.gd
 $GODOT --path . --resolution 1280x720 --script res://tools/shot_help.gd
 $GODOT --path . --resolution 1280x720 --script res://tools/test_interaction.gd -- 6000
+$GODOT --path . --resolution 720x1280 --script res://tools/shot_portrait.gd -- auto
 ```
 
 - `screenshot.gd` args: `<scene> <out.png> <wait_frames> <zoom> [auto]`. Append **`auto`** to hand the
@@ -91,6 +93,15 @@ $GODOT --path . --resolution 1280x720 --script res://tools/test_interaction.gd -
   edge's **outward normal**, plus how far the badge would move if you used the wrong one. Run it before
   touching port placement — see trap 16.
 - `--resolution` **must match the design resolution (1280×720)** for anything that involves mouse coordinates. See trap 3.
+- **Portrait preview** = launch with `--resolution 720x1280`: `BoardView._ready` then locks portrait
+  (`Layout`) and switches the content base to 720×1280 (measured: `size_changed` fires within the same
+  frame, the new viewport is readable from the next `process_frame`). On a screen too short for 1280 the
+  window manager shrinks the window (measured 720×1061 → viewport 868×1280, still portrait). Portrait
+  layout math lives in `ui/layout.gd`; the landscape branches of `board_origin_for` / `HUD.content_rect`
+  / `_apply_layout` are byte-for-byte untouched — `test_layout.gd` asserts the desktop (510, 360) /
+  px=62 / (910,12,356,696) values stay put. In portrait the log becomes a 「查看日志」 button + dialog
+  (landscape keeps the inline log; `HUD._log` must exist and be filled in **both** orientations —
+  `test_interaction.gd:330` reads it).
 
 ---
 
@@ -300,6 +311,27 @@ Read this section before debugging anything UI- or generation-related.
     `tools/test_ports.gd` asserts the lateral offset is **< 0.002**. `tools/probe_ports.gd` prints the
     per-edge angles if you ever want to see the damage.
 
+17. **`Button.pressed` needs a press *and* a release pair through `root.push_input`.** Pushing only
+    `pressed = true` works on the board (`Node2D._unhandled_input` reacts to the press) but never fires
+    a GUI button — the press lands, the button waits for the release, the signal never emits. Tests that
+    click buttons must push a `pressed = false` event at the same position afterwards
+    (see `tools/shot_portrait.gd::_click_vp`).
+
+18. **`push_input` mouse positions are interpreted in *window* coordinates, then scaled by viewport/window.**
+    Trap 3's scaling applies to synthetic input too: to hit a control at viewport point P, push
+    `P * window_size / viewport_size`. `get_global_rect()` returns viewport coordinates, so convert before
+    pushing. When window == base resolution the factor is 1 and the bug is invisible — it only bites in
+    portrait preview (window 720×1061 → viewport 868×1280, factor 0.83).
+
+19. **`git stash` / `git checkout` on the Windows box rewrites every tracked file CRLF ↔ LF,**
+    so a stash round-trip shows *all* files as modified (whole-file diffs, content identical). The repo
+    is LF; fix with `git diff -z --name-only | xargs -0 sed -i 's/\r$//'` (content-preserving). Verify real
+    changes with `git diff --ignore-cr-at-eol`. To screenshot a pre-change baseline, prefer
+    `git worktree add <path> HEAD` over stash.
+
+20. **Godot's `is_equal_approx` takes no tolerance argument** (1 arg on Vector2/Rect2, 2 as a global).
+    A third "tolerance" argument is a parse error, not a warning. Write `absf(a - b) <= tol` yourself.
+
 ---
 
 ## Definition of done
@@ -314,12 +346,14 @@ Before considering a change complete, run these and make sure they are green:
 | `test_dev_dialog.gd` | `通过 56 · 失败 0` / PASS（含 begin_turn 与 start_turn+roll_dice 骰子序列一致） |
 | `test_seed.gd` | all checks pass |
 | `test_safe_area.gd` | `通过 18 · 失败 0` / PASS（含桌面棋盘原点仍为 (510, 360)） |
+| `test_layout.gd` | `通过 29 · 失败 0` / PASS（竖屏自检表 66.12 / 62.96 / 45.3 + 桌面零漂） |
 | `test_legend.gd` | `通过 36 · 失败 0` / PASS（花费取自 `Res.COST_*`，面板不越出视口 / 不压地块） |
 | `test_ports.gd` | `通过 51 · 失败 0` / PASS（牌面一个字，牌心横向偏移 < 0.002；不压地块、不重叠） |
 | `sim_runner.gd -- 30` | `不变量：棋盘异常 0 · 资源守恒破坏 0 · 状态完整性破坏 0` and `M1 验收结果：PASS` |
 | `test_interaction.gd -- 6000` | `M2 验收结果：PASS` |
 | `shot_dialog.gd` | `--- 结果：PASS ---` |
 | `shot_help.gd` | 点击后 `legend_open=true`、点面板亦 `误落子 0 次`，PNG written |
+| `shot_portrait.gd`（`--resolution 720x1280`，禁止 headless） | `竖屏分区渲染验证：PASS`（分区断言 + 日志弹窗点击 / Esc，PNG written） |
 | `screenshot.gd` | board self-check passes, `地形贴图: 6/6 已加载`, PNG written |
 
 Also: if you changed a rule, an AI heuristic, or generation logic, **report the numbers**
