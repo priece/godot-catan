@@ -136,8 +136,9 @@ log is never truncated: every event since the session started is kept, and the t
 total. In portrait it lives behind the **查看日志** button in a full-screen dialog.
 
 **Notes.** Cyan outlines mark legal *and affordable* placements (legality alone is not enough — you may
-not be able to pay). The **?** legend is collapsed by default and its open panel swallows clicks, so
-reading it can never build a village. Press **Esc** to close any dialog. The restart dialog accepts
+not be able to pay). The **?** legend is collapsed by default, it is **modal** — one tap anywhere
+(board, the panel itself, the right-hand info panel) closes it — and the tap that closes it never
+builds anything. Press **Esc** to close any dialog. The restart dialog accepts
 digits only: type a seed and press Enter or click **确定**, or use **随机一局** / **沿用本局** for the
 two shortcuts.
 
@@ -282,7 +283,7 @@ real bugs here (silent theme-override failures, `text_changed` not firing on pro
 | Portrait layout (P0–P2) | `ui/layout.gd` holds the portrait-only math; board on top, info area spanning the full width below, log collapsed into **查看日志** + full-screen dialog. Landscape branches are untouched — the desktop board origin is still exactly (510, 360). Handheld orientation is locked to portrait; desktop windows are unaffected. |
 | Portrait launchers | `portrait_start.sh` (macOS/Linux) and `portrait_start.bat` (Windows) — window shape is the only switch. |
 | Wide-screen layout | The panel is pinned to the viewport's right edge and the board centres in the remaining area, so ultrawide windows no longer stretch the gap. |
-| Legend folded into **?** | Top-left button, collapsed by default, two columns (terrain → resource, build → cost). Costs are read from `Res.COST_*`, never copied into the UI. The open panel swallows clicks, so reading help can no longer build a village. |
+| Legend folded into **?** | Top-left button, collapsed by default, two columns (terrain → resource, build → cost). Costs are read from `Res.COST_*`, never copied into the UI. It is a **modal overlay**: any tap — board, info panel or the legend itself — closes it, and the closing tap is swallowed, so reading help can never build a village. |
 | Phone safe area | Real display cutout / home-bar insets, applied per orientation to the board, top-left buttons, legend and the HUD *content* box (the background still runs to the screen edge). |
 | Touch picking | `Pick.ANY` is **vertex-first**: a tap that lands inside a highlighted vertex can never turn into "build a road" on the edge behind it. |
 | Bank trade dialog | **兑换** opens a dialog: pick what you give on the left (amount = your best ratio, port bonuses included), what you get on the right. Option buttons are disabled when you cannot pay. |
