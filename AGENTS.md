@@ -98,7 +98,9 @@ $GODOT --path . --resolution 720x1280 --script res://tools/shot_portrait.gd -- a
 - `test_interaction.gd` simulates real clicks through the same signals the UI emits (M2 acceptance).
 - `shot_help.gd` pushes a **real** mouse click at the "?" button via `root.push_input` and asserts the
   legend toggles without triggering a board build; it then **moves the board up** so a board vertex
-  really falls under the open panel and clicks it — the overlay must swallow that click too. It also
+  really falls under the open panel and clicks it — the overlay must swallow that click too. Finally it
+  checks the modal rule: clicking the board centre, the right HUD background and the panel itself all
+  close the legend, and none of those clicks build anything. It also
   writes a 2× crop of the top-left corner (`*_zoom.png`) — the button and the legend are both in that
   tiny patch, easy to miss at full size.
 - `probe_legend.gd` is a read-only probe: prints the legend's size and what it covers (hexes, vertices,
@@ -223,8 +225,15 @@ DESIGN.md Full design document (Chinese) — the authoritative reference
   `BoardView.port_marker_pos()` places a badge at the edge midpoint offset along the edge's
   **outward normal**; see trap 16 for why the radial direction is wrong.
 - **Anything drawn on top of the board must also swallow input.** The legend covers the top-left sea and
-  can reach a pickable vertex on a short viewport; `BoardView._hit_legend()` consumes the click, otherwise
+  can reach a pickable vertex on a short viewport; the click that closes it is consumed, otherwise
   tapping the legend builds a settlement underneath it ("点帮助却建了座村庄").
+- **The legend is a modal overlay: one tap anywhere closes it.** Tapping the panel itself, the board,
+  the empty sea or the right-hand HUD closes it; the tap that closes it never reaches the board
+  (`BoardView._input` swallows it). The one exception is the HUD panel's own box — there the click
+  closes the legend **and keeps going**, otherwise pressing 「结束回合」 would look like a dead button
+  the first time. This lives in `_input`, **not `_unhandled_input`**: the HUD's background `ColorRect`
+  is `MOUSE_FILTER_STOP`, so it kills the click during the GUI phase and `_unhandled_input` never sees
+  it (that was the "tapping the right panel won't close the legend" bug). Only the `?` button toggles.
 - **Artwork**: all originals live in `assets/resource.src/` (read-only, `.gdignore`d so Godot never
   imports them). Derived, downscaled copies go in `assets/<type>/` for the game to use.
 - **UI palette**: as of the current design, 4 player colors are blue/red/orange/green and names are
@@ -383,8 +392,8 @@ Before considering a change complete, run these and make sure they are green:
 | `sim_runner.gd -- 30` | `不变量：棋盘异常 0 · 资源守恒破坏 0 · 状态完整性破坏 0` and `M1 验收结果：PASS` |
 | `test_interaction.gd -- 6000` | `M2 验收结果：PASS` |
 | `shot_dialog.gd` | `--- 结果：PASS ---` |
-| `shot_help.gd` | 点击后 `legend_open=true`、点面板亦 `误落子 0 次`，PNG written |
-| `shot_portrait.gd`（`--resolution 720x1280`，禁止 headless） | `竖屏分区渲染验证：PASS`（分区断言 + 日志弹窗点击 / Esc，PNG written） |
+| `shot_help.gd` | 点击后 `legend_open=true`、点面板亦 `误落子 0 次`、点棋盘 / 右侧面板 / 面板本体都 `legend_open=false`，PNG written |
+| `shot_portrait.gd`（`--resolution 720x1280`，禁止 headless） | `竖屏分区渲染验证：PASS`（分区断言 + 日志弹窗点击 / Esc + 点信息区关图例，PNG written） |
 | `screenshot.gd` | board self-check passes, `地形贴图: 6/6 已加载`, PNG written |
 
 Also: if you changed a rule, an AI heuristic, or generation logic, **report the numbers**

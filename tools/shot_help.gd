@@ -6,13 +6,15 @@ extends SceneTree
 ## 用法：
 ##   Godot --path . --resolution 1280x720 --script res://tools/shot_help.gd -- [截图前缀]
 ##
-## 它干四件事：
+## 它干五件事：
 ##   1. 截"收起 / 展开"两张图，人工确认"?"按钮与图例面板（两列：地形 + 建造花费）的位置和配色；
 ##   2. 用 root.push_input 发**真实鼠标点击**给按钮，确认能翻转展开状态
 ##      （直接调 legend_open 不算数 —— 那测不到命中判定和输入通路）；
 ##   3. 在 Pick.ANY + 顶点已高亮的情况下点按钮，确认**没有误落子**；
 ##   4. 把棋盘上移，让棋盘点真的落进面板里，再点它 —— 确认**点面板本体也不落子**
-##      （面板是浮层，视觉上盖住的区域必须交互上也盖住）。
+##      （面板是浮层，视觉上盖住的区域必须交互上也盖住；顺手也验证"点面板 = 关闭"）；
+##   5. 确认图例是**模态浮层**：开着的时候点屏幕任何位置（棋盘中央 / 右侧信息面板的
+##      空白 / 面板本体）都能关掉，而且关掉的那次点击不能顺手落子。
 
 var _scene: Node
 var _bv: BoardView
@@ -37,7 +39,7 @@ func _initialize() -> void:
 	RenderingServer.frame_post_draw.connect(_on_frame)
 
 func _on_frame() -> void:
-	if _step > 4:
+	if _step > 5:
 		return
 	if _wait > 0:
 		_wait -= 1
@@ -90,17 +92,61 @@ func _on_frame() -> void:
 				print("棋盘上移 165px 后，棋盘点 #%d %s 落进面板（命中判定 %s）"
 					% [under, p, _bv._hit_legend(p)])
 				_click(p)
-				print("点面板上这个棋盘点：误落子 %d 次（应为 0）" % (_clicks - before))
+				print("点面板上这个棋盘点：误落子 %d 次（应为 0）· legend_open=%s（点面板也算点别处，应为 false）"
+					% [_clicks - before, _bv.legend_open])
 				if _clicks != before:
 					print("!! 点在图例面板上竟然落子了 —— 面板没有吃掉点击")
+				if _bv.legend_open:
+					print("!! 点面板本体没有关掉图例")
 			else:
 				print("!! 挪了棋盘还是没有棋盘点落进面板 —— 面板尺寸 / 命中判定有问题")
 			_bv.board_origin = keep
+			_bv.redraw()
+			# 上一步已经把图例关掉了，重新点开才能验证"按钮再点一次收起"
+			_bv.legend_open = true
 			_bv.redraw()
 			_click(_bv.help_center())
 			print("再点一次 legend_open=%s（应为 false）· 误落子 %d 次" % [_bv.legend_open, _clicks])
 			_next(3)
 		3:
+			# ---- 图例是模态浮层：开着时点屏幕任何位置都关掉 ----
+			# 三个位置分别踩一条输入通路，缺一不可：
+			#   ① 棋盘中央 —— 最常见的一下，既要关图例，也不能顺手落子；
+			#   ② 右侧信息面板的空白（底色 ColorRect，MOUSE_FILTER_STOP）——
+			#      它会在 GUI 阶段吃掉点击，所以只有 `_input` 能看见这一次，
+			#      放到 `_unhandled_input` 就会"点面板关不掉图例"；
+			#   ③ 面板本体 —— 玩家最快的关法往往是顺手戳一下面板，也该关。
+			var before := _clicks
+			_bv.legend_open = true
+			_bv.redraw()
+			_click(Vector2(640.0, 420.0))
+			print("图例开着点棋盘中央：legend_open=%s（应 false）· 误落子 %d 次（应为 0）"
+				% [_bv.legend_open, _clicks - before])
+			if _bv.legend_open or _clicks != before:
+				print("!! 点棋盘别处没有关掉图例，或关的同时顺手落了子")
+
+			_bv.legend_open = true
+			_bv.redraw()
+			before = _clicks
+			# 面板内容盒是 y∈[12, 696]，所以 705 正好落在底色上（纯 ColorRect）
+			_click(Vector2(1150.0, 705.0))
+			print("图例开着点右侧面板空白：legend_open=%s（应 false）· 误落子 %d"
+				% [_bv.legend_open, _clicks - before])
+			if _bv.legend_open:
+				print("!! 点信息面板关不掉图例 —— 点击被 GUI 的 ColorRect 吃在半路了")
+
+			_bv.legend_open = true
+			_bv.redraw()
+			before = _clicks
+			_click(_bv.legend_rect().get_center())
+			print("图例开着点面板本体：legend_open=%s（应 false）· 误落子 %d（应为 0）"
+				% [_bv.legend_open, _clicks - before])
+			if _bv.legend_open or _clicks != before:
+				print("!! 点图例面板本体没有关掉它，或关的同时让点击穿透到棋盘")
+			_bv.legend_open = false
+			_bv.redraw()
+			_next(4)
+		4:
 			# 安全区那段代码在桌面上永远走不到（真实 insets 恒为 0），
 			# 于是这里注入一组"手机横屏"的值强行跑一遍：左挖孔 44 + 右挖孔 44 + 底部手势条 18。
 			# 不这么做，"避让"就只能等上真机才发现写错。
@@ -112,9 +158,9 @@ func _on_frame() -> void:
 			print("模拟安全区 左44/右44/下18：按钮中心 %s · 棋盘原点 %s" % [
 				_bv.help_center(), _bv.board_origin])
 			print("模拟安全区截图 -> %s_safe.png" % _prefix)
-			_next(4)
+			_next(5)
 		_:
-			_step = 5          # 先置位再截图：quit() 要等本帧结束才生效，不然会重复跑一次
+			_step = 6          # 先置位再截图：quit() 要等本帧结束才生效，不然会重复跑一次
 			_shot(_prefix + "_safe.png")
 			SafeArea.set_override(null)
 			print("安全区已复位（后续运行不再受影响）")

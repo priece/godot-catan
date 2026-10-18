@@ -230,6 +230,49 @@ func player_color(pid: int) -> Color:
 
 # ================= 输入 =================
 
+## 图例是**模态浮层**：开着的时候，点屏幕任何位置先把它关掉。
+##
+## 为什么放在 `_input` 而不是 `_unhandled_input`：
+##   右侧信息面板的底色是个 ColorRect（默认 `MOUSE_FILTER_STOP`），点击在 GUI 阶段
+##   就被它 STOP 掉了，根本走不到 `_unhandled_input` —— 于是"点右下面板关图例"
+##   只能靠 `_input`（它排在 GUI 之前，能看见整屏任何一次点击）。
+##
+## 为什么关图例的这一次点击**不再下传**：图例是浮层，"点一下关掉"如果同时还落子，
+## 就又是"点帮助却建了座村庄"。唯一例外是点进 HUD 面板的地盘 —— 那里全是按钮和
+## 输入框，吞掉会变成"点了『结束回合』没反应，图例倒是关了"，所以只关图例、事件继续。
+##
+## `?` 按钮单独一个分支：它本来就是开关，开着时点它等于"收起"，无需再走通用关闭。
+## 面板本体**也算"别处"** —— 它只是一张说明书，点它不该没反应（玩家最快的关法
+## 往往就是顺手戳一下面板）。反正点击被吃掉，不会穿透到下面的地块 / 顶点。
+func _input(event: InputEvent) -> void:
+	if not show_legend:
+		return
+	if not (event is InputEventMouseButton):
+		return
+	if not event.pressed or event.button_index != MOUSE_BUTTON_LEFT:
+		return
+	var pos: Vector2 = event.position
+	if _hit_help(pos):
+		legend_open = not legend_open
+		get_viewport().set_input_as_handled()
+		queue_redraw()
+		return
+	if not legend_open:
+		return
+	legend_open = false
+	# HUD 面板那块不吞：让按钮 / 输入框照常响应（见上面的注释）
+	if not _hit_hud(pos):
+		get_viewport().set_input_as_handled()
+	queue_redraw()
+
+## 落点是否在右侧信息面板（竖屏则是下方信息区）的地盘里。
+## 只用于"关图例时要不要吞掉这次点击"这一个判断。
+func _hit_hud(pos: Vector2) -> bool:
+	var vp := get_viewport_rect().size
+	if Layout.is_portrait():
+		return Layout.panel_rect(vp, _ins).has_point(pos)
+	return pos.x >= vp.x - HUD.PANEL_W
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		if _hit_legend(event.position):
@@ -240,19 +283,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		_set_help_hover(_hit_help(event.position))
 		_update_hover(event.position)
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		if _hit_help(event.position):
-			# 先吃掉这次点击再 return：否则按当前 pick 模式它还会被当成一次落子。
-			# （左上角离棋盘很远，出事概率低，但"点帮助却建了座村庄"这种 bug 一次就够呛。）
-			legend_open = not legend_open
-			get_viewport().set_input_as_handled()
-			queue_redraw()
-			return
-		if _hit_legend(event.position):
-			# 面板比原来的图例宽，会盖住棋盘最左边一点点。既然视觉上盖住了，
-			# 就必须在交互上也盖住 —— 否则点在图例文字上，底下那块地照样响应，
-			# 又变成"点帮助却建了座村庄"（这次是点了图例本体）。
-			get_viewport().set_input_as_handled()
-			return
+		# 图例的开关在 _input 里就处理完了（见上面的注释）；能走到这里说明这次点击
+		# 不在任何浮层上，直接交给棋盘。
 		_handle_click(event.position)
 
 ## 清掉棋盘上的 hover 高亮（光标移到浮层上时用）

@@ -6,14 +6,16 @@ extends SceneTree
 ## 用法（auto 由 game_director.gd 解析，把人类座位交给 AI，整局自动推进）：
 ##   Godot --path . --resolution 720x1280 --script res://tools/shot_portrait.gd -- auto
 ##
-## 它干四件事（plan-2026.10.15.a §5.2）：
+## 它干五件事（plan-2026.10.15.a §5.2）：
 ##   1. 注入手机竖屏安全区 (18,34,18,18)，加载 main.tscn，等 20 帧
 ##      （§4.4 实测：写 content_scale_size 当帧 vp 即生效，20 帧绰绰有余）；
 ##   2. 断言朝向锁定、px_per_unit 与 Layout 算式一致、棋盘落在 board_rect 内、
 ##      信息区（底色 + 内容盒）不压棋盘且让开安全区；
 ##   3. 真实点击「查看日志」按钮（root.push_input；trap 3：推送坐标按窗口坐标
 ##      解释，要乘 窗口/视口 倍率换算），断言日志弹窗打开、日志非空，Esc 能关掉；
-##   4. 存两张图（分区全景 / 弹窗打开态）到 user:// 并打印绝对路径，
+##   4. 竖屏下点**下方信息区**也要能关掉图例（`_input` 是唯一能看到这次点击的地方，
+##      见 board_view.gd `_input` 的注释）；
+##   5. 存两张图（分区全景 / 弹窗打开态）到 user:// 并打印绝对路径，
 ##      供 crop_shot.gd 放大检查 20px 细节。
 
 var _scene: Node
@@ -35,7 +37,7 @@ func _initialize() -> void:
 	RenderingServer.frame_post_draw.connect(_on_frame)
 
 func _on_frame() -> void:
-	if _step > 2:
+	if _step > 3:
 		return
 	if _wait > 0:
 		_wait -= 1
@@ -45,8 +47,10 @@ func _on_frame() -> void:
 			_step0()
 		1:
 			_step1()
-		_:
+		2:
 			_step2()
+		_:
+			_step3()
 
 # ---------- 第 0 步：分区断言 + 全景截图 + 点「查看日志」 ----------
 func _step0() -> void:
@@ -113,10 +117,26 @@ func _step1() -> void:
 	_wait = 3
 	_step = 2
 
-# ---------- 第 2 步：Esc 关闭 + 收尾 ----------
+# ---------- 第 2 步：竖屏点信息区也能关图例 ----------
 func _step2() -> void:
-	_step = 3          # 先置位：quit() 要等本帧结束，不然会重复跑
 	_check("Esc 关掉日志弹窗", not _hud._log_dlg.visible)
+
+	# 图例开着时点下方信息区的空白（底色 ColorRect 的地盘）——
+	# 那里点击会被 GUI STOP 掉，只有 BoardView._input 看得见，断言它确实关了。
+	var vp: Vector2 = root.get_visible_rect().size
+	var pr := Layout.panel_rect(vp, SafeArea.insets())
+	_bv.legend_open = true
+	_bv.redraw()
+	_click_vp(pr.position + Vector2(6.0, 6.0))
+	_check("竖屏点信息区空白关掉图例（legend_open=%s）" % _bv.legend_open,
+		not _bv.legend_open)
+
+	_wait = 3
+	_step = 3
+
+# ---------- 第 3 步：收尾 ----------
+func _step3() -> void:
+	_step = 4          # 先置位：quit() 要等本帧结束，不然会重复跑
 	SafeArea.set_override(null)
 	print("通过 %d · 失败 %d" % [_ok_count, _fails])
 	print("竖屏分区渲染验证：%s" % ("PASS" if _fails == 0 else "FAIL"))
