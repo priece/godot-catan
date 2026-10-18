@@ -281,7 +281,7 @@ Android 构建模板在 `android/build/`，由编辑器 `项目 → 安装 Andro
 | `repo1.maven.org` | 200 |
 | `maven.aliyun.com/repository/google` | 200，0.2s |
 
-本机曾配过代理 `127.0.0.1:17892`（在系统 Internet 设置里），但 `ProxyEnable=0` 且端口**没有监听**（代理客户端没开）。结论：**凡指向 Google 的地址都会失败**，所以下面两处都得换，只换一处没用。
+本机曾配过代理 `127.0.0.1:<端口>`（在系统 Internet 设置里），但 `ProxyEnable=0` 且端口**没有监听**（代理客户端没开）。结论：**凡指向 Google 的地址都会失败**，所以下面两处都得换，只换一处没用。
 
 #### (1) Gradle 发行包
 
@@ -437,6 +437,10 @@ package/signed=true      # 模板默认是 false
 
 > 用的是 Godot **自动生成**的调试密钥库（`%APPDATA%\Godot\keystores\debug.keystore`，来自编辑器设置 `export/android/debug_keystore`）——**不是**密钥库缺失，排查时别往那个方向找。该文件实测存在（2714 字节）。
 > `export_presets.cfg` 已 gitignore，改动只在本机生效；换机器或重建预设时要重勾一次。
+>
+> ⚠️ 下文命令里出现的 `android` / `androiddebugkey` 是 **AOSP 调试密钥库的公开默认口令与别名**
+> （任何机器上的 debug.keystore 都是这一对），**不是**本项目的密钥，也没有泄露风险；
+> 正式的 release 签名口令只存在于本机的 `export_presets.cfg`，该文件不入库。不要把它当成"示例密钥"套用到别处。
 
 **修 A（命令行出包）**：把参数补上即可：
 

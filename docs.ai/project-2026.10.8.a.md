@@ -18,7 +18,7 @@
 
 ```bash
 # 图形界面
-open -a Godot /Users/ym/godot/godot02-catan      # 打开后按 F5
+open -a Godot ~/godot/godot02-catan      # 打开后按 F5
 
 # 主场景
 res://scenes/main.tscn                          # 已写入 run/main_scene
