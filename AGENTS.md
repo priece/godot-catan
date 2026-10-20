@@ -91,6 +91,7 @@ $GODOT --path . --resolution 1280x720 --script res://tools/shot_dev_dialog.gd
 $GODOT --path . --resolution 1280x720 --script res://tools/shot_help.gd
 $GODOT --path . --resolution 1280x720 --script res://tools/test_interaction.gd -- 6000
 $GODOT --path . --resolution 720x1280 --script res://tools/shot_portrait.gd -- auto
+$GODOT --path . --resolution 720x1280 --script res://tools/shot_pgrid.gd
 ```
 
 - `screenshot.gd` args: `<scene> <out.png> <wait_frames> <zoom> [auto]`. Append **`auto`** to hand the
@@ -108,6 +109,10 @@ $GODOT --path . --resolution 720x1280 --script res://tools/shot_portrait.gd -- a
 - `probe_ports.gd` prints, for all 9 port edges, the angle between the **radial** direction and the
   edge's **outward normal**, plus how far the badge would move if you used the wrong one. Run it before
   touching port placement — see trap 16.
+- `shot_pgrid.gd` captures the portrait action grid in all three phase states (main / preroll / AI-turn)
+  by mounting the HUD alone and feeding it a fabricated state — `shot_portrait.gd` runs the auto demo,
+  where the human seat is AI-driven, so the human-only grids would never appear there. PNGs are written
+  to the current working directory as `_N_*.png` (SceneTree `--script` context has no `user://`).
 - `--resolution` **must match the design resolution (1280×720)** for anything that involves mouse coordinates. See trap 3.
 - **Portrait preview** = launch with `--resolution 720x1280`: `BoardView._ready` then locks portrait
   (`Layout`) and switches the content base to 720×1280 (measured: `size_changed` fires within the same
@@ -372,6 +377,14 @@ Read this section before debugging anything UI- or generation-related.
     `vertex_connected_to_network` checks — it never walks back to your main network). Do not "fix" the
     isolated road away. `test_rules.gd::_test_road_building_free` pins all of it down.
 
+23. **`GridContainer` silently re-flows around *any* invisible child — including a hidden slot
+    container.** The portrait action grid (`HUD._act_grid`, 3×2 big square buttons) keeps every cell in
+    a never-hidden wrapper (`_grid_slot()`) and toggles only the *button's* `visible`. Hiding a wrapper
+    (or dropping a button in as a direct grid child and hiding it) makes the remaining buttons flow
+    left-to-right to fill the gap — e.g. 「重开一局」 drops to a third row in the preroll state.
+    An empty-but-visible wrapper still occupies its cell (min size 0), so blank cells render as
+    intentional negative space and positions never jump between phases.
+
 ---
 
 ## Definition of done
@@ -394,6 +407,7 @@ Before considering a change complete, run these and make sure they are green:
 | `shot_dialog.gd` | `--- 结果：PASS ---` |
 | `shot_help.gd` | 点击后 `legend_open=true`、点面板亦 `误落子 0 次`、点棋盘 / 右侧面板 / 面板本体都 `legend_open=false`，PNG written |
 | `shot_portrait.gd`（`--resolution 720x1280`，禁止 headless） | `竖屏分区渲染验证：PASS`（分区断言 + 日志弹窗点击 / Esc + 点信息区关图例，PNG written） |
+| `shot_pgrid.gd`（`--resolution 720x1280`，禁止 headless） | 三张 PNG（主阶段 / 掷骰前 / AI 回合）写出，网格无错位、无孤儿按钮 |
 | `screenshot.gd` | board self-check passes, `地形贴图: 6/6 已加载`, PNG written |
 
 Also: if you changed a rule, an AI heuristic, or generation logic, **report the numbers**

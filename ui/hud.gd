@@ -59,6 +59,15 @@ var _btn_restart: Button
 var _btn_roll: Button
 var _btn_play: Button
 var _act_row: HBoxContainer    ## 结束回合 / 买发展卡 / 兑换 —— 掷骰前整行隐藏
+## 竖屏操作网格（仅竖屏创建，横屏为 null）：3 列 × 2 行的大号按钮。
+## A 行 = 本阶段动作：掷骰子（掷骰前）/ 结束回合（主阶段）共用一个格子互斥显示、
+## 买发展卡、兑换；B 行 = 常驻：打发展卡、查看日志、重开一局。
+## ⚠️ 六个格子用空容器占位且**永不隐藏**（GridContainer 会跳过隐藏子节点、
+## 格子会流动重排）；切阶段只改格内按钮的 visible，方块位置永远不跳。
+var _act_grid: GridContainer
+var _slot_roll: HBoxContainer   ## A1：掷骰子 / 结束回合 共格
+var _slot_buy: HBoxContainer    ## A2：买发展卡（仅主阶段有内容）
+var _slot_trade: HBoxContainer  ## A3：兑换（仅主阶段有内容）
 ## 银行兑换弹窗（替代原来那排"点一下即换"的按钮）：
 ## 左列 = 可付出的资源（带当前比例 4/3/2），右列 = 换回的资源，
 ## 两侧都能点选高亮，底部 确定/取消。
@@ -407,7 +416,9 @@ func _build() -> void:
 	# 位置/尺寸由 _apply_layout() 统一算；下面沿用局部名 box 继续挂子控件
 	var box := _box
 
-	# 标题行：左边标题，右边"重开一局"。放标题行是为了不占日志的竖向空间。
+	# 标题行：左边标题，右边"重开一局"（仅横屏；竖屏"重开一局"挪进操作网格，
+	# 与打发展卡/查看日志 凑成常驻一行，不在标题行挤小字）。
+	# 放标题行是为了不占日志的竖向空间。
 	var title_row := HBoxContainer.new()
 	title_row.add_theme_constant_override("separation", 8)
 	box.add_child(title_row)
@@ -416,14 +427,18 @@ func _build() -> void:
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title_row.add_child(title)
 
+	for pid in 4:
+		box.add_child(_make_player_row(pid))
+
+	if Layout.is_portrait():
+		_build_portrait_actions(box)
+		return
+	# ———— 以下横屏布局：桌面 1280×720 逐像素基线，勿动 ————
 	_btn_restart = _button("重开一局")
 	_btn_restart.add_theme_font_size_override("font_size", 12)
 	_btn_restart.tooltip_text = "放弃当前这局，重新开始（会保留之前的日志）"
 	_btn_restart.pressed.connect(func(): show_dialog(_cur_seed))
 	title_row.add_child(_btn_restart)
-
-	for pid in 4:
-		box.add_child(_make_player_row(pid))
 
 	_status = _label("", 13, UIPalette.INK, true)
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -467,20 +482,122 @@ func _build() -> void:
 	_btn_trade.pressed.connect(show_trade_dialog)
 	_act_row.add_child(_btn_trade)
 
-	if Layout.is_portrait():
-		# 竖屏（D7）：面板高度有限，日志收成「查看日志」按钮 + 弹窗。
-		# 朝向在 BoardView._ready 已锁定（树序它先 ready），这里一次性分支即可，
-		# 运行中不需要 reparent。
-		_btn_log = _button("查看日志（0 条）")
-		_btn_log.tooltip_text = "事件只增不减，点开看全部历史"
-		_btn_log.pressed.connect(open_log_dialog)
-		box.add_child(_btn_log)
-		_build_log_dialog()
-	else:
-		_log_title = _label("事件日志", 12, UIPalette.MUTED, true)
-		box.add_child(_log_title)
-		_log = _make_log_view()
-		box.add_child(_log)
+	# （竖屏的「查看日志」按钮在 _build_portrait_actions 的操作网格里，走不到这里）
+	_log_title = _label("事件日志", 12, UIPalette.MUTED, true)
+	box.add_child(_log_title)
+	_log = _make_log_view()
+	box.add_child(_log)
+
+## 竖屏（触控）操作区：状态/骰子并排一行 + 3×2 方块按钮网格。
+##
+## 手机上是手指操作，横屏那套 30px 高的细条按钮完全戳不准，
+## 所以竖屏重排为大方块（鸣叔要求的 1:1 宽高比，见 _fit_portrait_actions）：
+##   A 行 = 本阶段动作：[掷骰子(掷骰前)/结束回合(主阶段) 共格互斥] [买发展卡] [兑换]
+##   B 行 = 常驻：[打发展卡] [查看日志] [重开一局]
+## 格子用空容器占位，切阶段只改按钮 visible，按钮位置不跳；
+## 「重开一局」从标题行挪到这里，与另两个常驻按钮凑满一行，标题行只留标题。
+func _build_portrait_actions(box: VBoxContainer) -> void:
+	# 状态行：提示与轮次骰子并排，省一行高度留给按钮
+	var stat_row := HBoxContainer.new()
+	stat_row.add_theme_constant_override("separation", 10)
+	box.add_child(stat_row)
+	_status = _label("", 13, UIPalette.INK, true)
+	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stat_row.add_child(_status)
+	_dice = _label("", 13, UIPalette.MUTED, true)
+	stat_row.add_child(_dice)
+
+	_act_grid = GridContainer.new()
+	_act_grid.columns = 3
+	_act_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_act_grid.add_theme_constant_override("h_separation", 8)
+	_act_grid.add_theme_constant_override("v_separation", 8)
+	box.add_child(_act_grid)
+
+	# A1：掷骰子 / 结束回合 共格互斥（掷骰前只能掷骰，主阶段只能结束回合）
+	_slot_roll = _grid_slot()
+	_act_grid.add_child(_slot_roll)
+	_btn_roll = _portrait_button("掷骰子", true)
+	_btn_roll.tooltip_text = "掷两颗骰子，结算本回合产出"
+	_btn_roll.pressed.connect(func(): roll_dice_pressed.emit())
+	_slot_roll.add_child(_btn_roll)
+	_btn_end = _portrait_button("结束回合", true)
+	_btn_end.pressed.connect(func(): end_turn_pressed.emit())
+	_slot_roll.add_child(_btn_end)
+
+	_slot_buy = _grid_slot()
+	_act_grid.add_child(_slot_buy)
+	_btn_buy = _portrait_button("买发展卡")
+	_btn_buy.pressed.connect(func(): buy_dev_pressed.emit())
+	_slot_buy.add_child(_btn_buy)
+
+	_slot_trade = _grid_slot()
+	_act_grid.add_child(_slot_trade)
+	_btn_trade = _portrait_button("兑换")
+	_btn_trade.tooltip_text = "与银行兑换资源：4:1，任意型港口 3:1，特定型港口 2:1"
+	_btn_trade.pressed.connect(show_trade_dialog)
+	_slot_trade.add_child(_btn_trade)
+
+	# B 行常驻。打发展卡掷骰前后都能打；查看日志 / 重开一局任何时候都可用。
+	# 这三个也各自占固定格子 —— 否则掷骰前 A 行整行隐藏时，
+	# 它们会被 GridContainer 往前流动重排（重开一局掉到第三行）。
+	var slot_play := _grid_slot()
+	_act_grid.add_child(slot_play)
+	_btn_play = _portrait_button("打发展卡")
+	_btn_play.tooltip_text = "打出 1 张发展卡：掷骰前、掷骰后都可以，每回合限 1 张"
+	_btn_play.pressed.connect(show_dev_dialog)
+	slot_play.add_child(_btn_play)
+
+	var slot_log := _grid_slot()
+	_act_grid.add_child(slot_log)
+	_btn_log = _portrait_button("查看日志（0 条）")
+	_btn_log.tooltip_text = "事件只增不减，点开看全部历史"
+	_btn_log.pressed.connect(open_log_dialog)
+	slot_log.add_child(_btn_log)
+
+	var slot_restart := _grid_slot()
+	_act_grid.add_child(slot_restart)
+	_btn_restart = _portrait_button("重开一局")
+	_btn_restart.tooltip_text = "放弃当前这局，重新开始（会保留之前的日志）"
+	_btn_restart.pressed.connect(func(): show_dialog(_cur_seed))
+	slot_restart.add_child(_btn_restart)
+
+	_build_log_dialog()
+
+## 网格占位格子：空 HBox，永不隐藏（隐藏会让 GridContainer 重排），
+## 只负责把按钮固定在 3×2 里的某个位置。不吃点击 —— 空格子上的触摸
+## 应穿过它落到面板底色上。
+func _grid_slot() -> HBoxContainer:
+	var slot := HBoxContainer.new()
+	slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	return slot
+
+## 竖屏：把扣除其余内容后的剩余高度平分给操作网格的每一行，
+## 让按钮尽量接近 1:1 方块（手机上最好戳的尺寸）。
+## 高度以格宽为上限 —— 再高就变成竖条了；矮屏（iPad 3:4）退化成稍扁的横条。
+## 在 _apply_layout（视口变化）和 refresh（阶段切换改变网格行数）里都要调。
+func _fit_portrait_actions() -> void:
+	if _act_grid == null or _box.size.y <= 0.0:
+		return
+	var used := 0.0
+	var shown := 0
+	for c in _box.get_children():
+		if c == _act_grid or not (c is Control) or not c.visible:
+			continue
+		used += (c as Control).get_combined_minimum_size().y
+		shown += 1
+	# B 行（打发展卡/查看日志/重开一局）常驻算一行；
+	# A 行只有掷骰子/结束回合/买发展卡/兑换任一可见时才存在
+	var rows := 1
+	if _btn_roll.visible or _btn_end.visible or _btn_buy.visible or _btn_trade.visible:
+		rows = 2
+	var gaps := 7.0 * shown + 8.0 * (rows - 1)   # _box 间距 7 + 网格行间距 8
+	var cell_w := (_box.size.x - 16.0) / 3.0     # 两列间距各 8
+	var h := clampf((_box.size.y - used - gaps) / rows, 48.0, cell_w)
+	for b in [_btn_roll, _btn_end, _btn_buy, _btn_trade, _btn_play, _btn_log, _btn_restart]:
+		b.custom_minimum_size = Vector2(0, h)
 
 ## 把面板钉在视口右缘，并让它随视口高度伸缩。
 ## 1280×720（设计分辨率）下与旧版绝对坐标逐像素一致；
@@ -504,6 +621,7 @@ func _apply_layout() -> void:
 		var r := content_rect(vp, ins)
 		_box.position = r.position
 		_box.size = r.size
+		_fit_portrait_actions()
 		return
 	var x := vp.x - PANEL_W
 	_bg.position = Vector2(x, 0)
@@ -614,8 +732,18 @@ func refresh(st: GameState, status: String, can_act: bool, main_phase: bool = tr
 
 	# 掷骰前只留「掷骰子 + 打发展卡」，主阶段才给建造/交易/结束回合。
 	# 隐藏而不是置灰：灰按钮会让玩家以为"再等等就能点"，实际这个窗口里永远点不了。
-	_act_row.visible = main_phase
-	_btn_roll.visible = preroll
+	if Layout.is_portrait():
+		# 竖屏网格：掷骰子与结束回合共格互斥；买发展卡/兑换只在主阶段出现。
+		# ⚠️ 格子（_slot_*）永远 visible，只藏格内按钮 —— 隐藏格子会让
+		# GridContainer 把后面的按钮流动重排（重开一局掉到下一行）。
+		_btn_roll.visible = preroll
+		_btn_end.visible = main_phase
+		_btn_buy.visible = main_phase
+		_btn_trade.visible = main_phase
+		_fit_portrait_actions()
+	else:
+		_act_row.visible = main_phase
+		_btn_roll.visible = preroll
 	_btn_end.disabled = not (can_act and main_phase)
 	_btn_buy.disabled = not (can_act and main_phase and Rules.can_buy_dev(st, 0))
 
@@ -1308,10 +1436,15 @@ func _label(text: String, size: int, col: Color, bold: bool) -> Label:
 
 ## primary=true 用来标出弹窗里的主操作（"确定"）：深蓝底 + 白字，
 ## 和旁边一排浅色次级按钮拉开层级，玩家一眼知道该点哪个。
-func _button(text: String, primary: bool = false) -> Button:
+##
+## font_size / radius / pad_v / shadow 是竖屏大号按钮用的尺寸参数：
+## 默认值的渲染效果与原实现逐字节一致（桌面零漂移红线），
+## 只有 _portrait_button 会传非默认值。
+func _button(text: String, primary: bool = false, font_size: int = 12,
+		radius: int = 6, pad_v: int = 6, shadow: bool = false) -> Button:
 	var b := Button.new()
 	b.text = text
-	b.add_theme_font_size_override("font_size", 12)
+	b.add_theme_font_size_override("font_size", font_size)
 	var fg := Color(1, 1, 1) if primary else UIPalette.INK
 	b.add_theme_color_override("font_color", fg)
 	b.add_theme_color_override("font_hover_color", fg)
@@ -1348,10 +1481,23 @@ func _button(text: String, primary: bool = false) -> Button:
 					sb.bg_color = Color(0.929, 0.925, 0.914)
 					sb.border_color = Color(0.855, 0.847, 0.827)
 		sb.set_border_width_all(1)
-		sb.set_corner_radius_all(6)
+		sb.set_corner_radius_all(radius)
+		# 竖屏大号按钮垫一层柔和投影，从面板底色上"浮"起来
+		if shadow and state != "disabled":
+			sb.shadow_color = Color(0, 0, 0, 0.10)
+			sb.shadow_size = 5
+			sb.shadow_offset = Vector2(0, 2)
 		sb.content_margin_left = 10
 		sb.content_margin_right = 10
-		sb.content_margin_top = 6
-		sb.content_margin_bottom = 6
+		sb.content_margin_top = pad_v
+		sb.content_margin_bottom = pad_v
 		b.add_theme_stylebox_override(state, sb)
+	return b
+
+## 竖屏操作网格用的大号按钮：16px 字号 + 14 圆角 + 投影，格子内双向扩满。
+## 颜色与 _button 同一套逻辑（primary = 蓝底白字主操作），只改尺寸参数。
+func _portrait_button(text: String, primary: bool = false) -> Button:
+	var b := _button(text, primary, 16, 14, 12, true)
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	b.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	return b
