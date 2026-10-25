@@ -42,8 +42,9 @@ const DIFF_NAMES := ["简单", "标准", "困难"]
 ## 注意：地形在所有模式下都是纯随机 —— **官方没有"相同资源不能相邻"这条限制**。
 @export var beginner_board: bool = true
 ## 三个电脑的难度：0 简单 / 1 标准 / 2 困难。
-## 默认给 1 个简单 + 2 个标准，比清一色简单更有来有回；想全简单就改成 [0,0,0]。
-@export var ai_difficulties: Array[int] = [0, 1, 1]
+## **默认三个都是「困难」**（鸣叔 2026-10-25 定）：默认就该是最难缠的对手，
+## 想放水在开局弹窗里逐行往下调即可。
+@export var ai_difficulties: Array[int] = [2, 2, 2]
 ## AI 每步之间的停顿（秒），让玩家看清它在干什么
 @export var ai_delay: float = 0.5
 ## 调试用：连"人类"座位也交给 AI，整局自动跑完（截图校验 / 回归测试用）

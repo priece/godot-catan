@@ -26,6 +26,14 @@ func _run_tests() -> void:
 	var got: Array = []
 	hud.new_game_pressed.connect(func(d: Array): got.append(d))
 
+	# ---- 默认难度：三个都是「困难」----
+	# 直接读 export 的默认值（不进场景树也能读；Node 用完 free 掉）。
+	# 这条是防漂移：默认档位是玩家一开局就看到的东西，改它必须是有意的。
+	var dir := GameDirector.new()
+	_ok(_eq(dir.ai_difficulties, [2, 2, 2]), "默认三个 AI 都是「困难」",
+		"实际 %s" % str(dir.ai_difficulties))
+	dir.free()
+
 	# ---- 难度合法化（静态纯函数，与弹窗选中的值同一套规则）----
 	_ok(_eq(GameDirector.sanitize_diffs([2, 0, 1]), [2, 0, 1]), "合法数组原样通过")
 	_ok(_eq(GameDirector.sanitize_diffs([9, -3]), [2, 0, 1]), "越界夹到 [困难, 简单, 标准]",

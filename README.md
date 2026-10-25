@@ -140,7 +140,7 @@ not be able to pay). The **?** legend is collapsed by default, it is **modal** �
 (board, the panel itself, the right-hand info panel) closes it — and the tap that closes it never
 builds anything. Press **Esc** to close any dialog (except before the first game — there is nothing to go
 back to then). The **new-game dialog** is the same panel in both cases: it pops up by itself before the
-first game so you can pick a difficulty (简单 / 标准 / 困难, default one easy + two medium) for **小红 /
+first game so you can pick a difficulty (简单 / 标准 / 困难 — all three default to 困难) for **小红 /
 小橙 / 小绿**, then **开始游戏** deals the cards. Mid-game **重开一局** reopens it to change the lineup
 and adds a **取消** button. The board is **randomised every game** — no seed to type. To reproduce one
 specific map from the log, launch with `--seed=123456`.
