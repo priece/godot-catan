@@ -52,6 +52,12 @@ func _on_frame() -> void:
 				print("!! 没找到 BoardView / HUD")
 				quit(1)
 				return
+			# 交互式启动会先弹「新开一局」等玩家选难度（只有 auto 模式不弹）。
+			# 这个探针要看的是棋盘上的图例，得先按默认难度把局开出来 ——
+			# 否则截到的是空棋盘，还没有遮罩挡着。
+			var dir := _find_dir(_scene)
+			if dir != null and dir.ctl == null:
+				_hud._fire_new_game()
 			_bv.vertex_clicked.connect(func(_v: int): _clicks += 1)
 			_bv.edge_clicked.connect(func(_e: int): _clicks += 1)
 			print("按钮中心 %s · 棋盘原点 %s · 棋盘缩放 %.0f" % [
@@ -215,6 +221,15 @@ func _find_board(n: Node) -> BoardView:
 		return n
 	for c in n.get_children():
 		var r := _find_board(c)
+		if r != null:
+			return r
+	return null
+
+func _find_dir(n: Node) -> GameDirector:
+	if n is GameDirector:
+		return n
+	for c in n.get_children():
+		var r := _find_dir(c)
 		if r != null:
 			return r
 	return null

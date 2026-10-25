@@ -32,6 +32,9 @@ const HUMAN := 0
 const AI_LABELS := ["小红", "小橙", "小绿"]
 const DIFF_NAMES := ["简单", "标准", "困难"]
 
+## 当前这一局的棋盘种子。**每局开始时重新随机**（见 start_game），
+## 所以这个导出值只在"还没开局"时是默认占位。
+## 想钉住某张地图排查问题用命令行 `--seed=NNN`，别在界面上开口子。
 @export var seed_value: int = 20261005
 ## 数字摆放的严格程度。
 ##   true  均衡布局：6/8 不相邻 **且** 相邻不同数字（官方 Almanac 对完全随机摆放的两条要求）
@@ -56,6 +59,9 @@ var _fails := 0
 ## 跨局保留的日志。重开一局不该把之前的记录清掉——
 ## 和"日志不做截断"是同一个原则。
 var _session_log: Array[String] = []
+## 命令行 `--seed=NNN` 钉住的种子（-1 = 没钉，每局自动随机）。
+## 只给开发和回归用：界面上的「新开一局」已经没有种子输入框了。
+var _fixed_seed := -1
 
 # ================= 装配 =================
 
@@ -63,12 +69,16 @@ var _session_log: Array[String] = []
 ## 用 call_deferred 而不是直接调：兄弟节点的 _ready 是深度优先执行的，
 ## HUD 的控件在它自己的 _ready 里才建出来，director 若在 _ready 里立刻刷新会拿到空引用。
 func _ready() -> void:
-	# 随机种子用的 RNG：别用全局 randomize()，那会污染 AI 的随机流，
-	# 这里单独一个实例，且不 seed()（构造时已自动随机化）。
+	var args := OS.get_cmdline_user_args()
 	# 命令行带 "auto" 就开自动演示（截图/回归用）
-	if OS.get_cmdline_user_args().has("auto"):
+	if args.has("auto"):
 		auto_play = true
 		ai_delay = 0.01   # 演示模式下不用等，尽快推进到中局
+	for a in args:
+		if a.begins_with("seed="):
+			var v := a.substr(5).strip_edges()
+			if v.is_valid_int():
+				_fixed_seed = int(v)
 	if board == null or hud == null:
 		var b := get_parent().get_node_or_null("BoardView")
 		var h := get_parent().get_node_or_null("HUD")
@@ -86,13 +96,21 @@ func bind(board_view: BoardView, hud_node: HUD) -> void:
 	hud.play_dev_pressed.connect(_on_play_dev)
 	hud.bank_trade_pressed.connect(_on_bank_trade)
 	hud.roll_dice_pressed.connect(_on_roll_dice)
-	hud.restart_pressed.connect(_on_restart)
+	hud.new_game_pressed.connect(start_game)
 
 	board.vertex_clicked.connect(_on_vertex_clicked)
 	board.edge_clicked.connect(_on_edge_clicked)
 	board.hex_clicked.connect(_on_hex_clicked)
 
-	_start_new_game.call_deferred()
+	_boot.call_deferred()
+
+## 开局前的分流：交互式启动先弹「新开一局」让玩家配难度；
+## 自动演示（截图/回归）直接开，否则会卡在没人点的弹窗上。
+func _boot() -> void:
+	if auto_play:
+		start_game(ai_difficulties)
+	else:
+		hud.show_new_game_dialog(ai_difficulties, false)
 
 func _start_new_game() -> void:
 	# 把上一局的日志接过来（日志只增不减，见 _session_log 的注释）
@@ -124,31 +142,45 @@ func _start_new_game() -> void:
 	ctl.st.log_lines = _session_log.duplicate()
 	ctl.st.log_line("")
 	ctl.st.log_line("[color=#8a8378]━━━━━━━━  新开一局  ━━━━━━━━[/color]")
-	ctl.st.log_line("棋盘种子 %d · %s · 对手：%s" % [
+	ctl.st.log_line("棋盘种子 %d（每局随机）· %s · 对手：%s" % [
 		seed_value, "均衡布局" if beginner_board else "随机布局", "，".join(roster)])
-	hud.on_new_game(seed_value)
+	hud.on_new_game(seed_value, ai_difficulties)
 	board.set_board_from(ctl)
 	board.redraw()
 	_fails = 0
 	_enter_setup()
 
-## 重新开始。seed_text 为空表示"沿用上一局种子"（同一张棋盘，方便复盘）；
-## 界面上点"随机"时传 "r"，会在这里换成一个新的随机种子。
-func _on_restart(seed_text: String) -> void:
-	var t := seed_text.strip_edges()
-	if t == "r" or t == "随机":
-		seed_value = _roll_seed()
-	elif t.is_valid_int():
-		seed_value = int(t)
-	elif not t.is_empty():
-		# 输入框已经标红提示过了，这里兜底不改种子，
-		# 免得玩家打错一个字符就丢掉当前这局的进度。
-		push_warning("种子 %s 不是整数，沿用上一局种子 %d" % [t, seed_value])
+## 开一局（开局弹窗的「开始游戏」和局中「重开一局」走的是同一条路）。
+##
+## diffs = 三个电脑的难度，下标对齐 AI_LABELS；越界/缺项一律按「标准」补。
+## **种子不从这里传**：每局自动随机（命令行 --seed=NNN 可钉住，见 _fixed_seed）。
+## 这样"每次开局都随机"是默认行为，玩家没有做错的可能。
+func start_game(diffs: Array) -> void:
+	ai_difficulties = sanitize_diffs(diffs)
+	seed_value = _fixed_seed if _fixed_seed >= 0 else _roll_seed()
 	_start_new_game()
 
+## 把外部传进来的难度数组夹成"三个合法值"（缺项按「标准」补）。
+##
+## 抽成**静态纯函数**有两个原因：
+##   1. 弹窗、测试、命令行都可能传进来，合法化只该有一份实现；
+##   2. GameDirector 是 Node，headless 单测里不方便 new 出来调实例方法，
+##      静态函数可以直接用（见 tools/test_setup_dialog.gd）。
+static func sanitize_diffs(diffs: Array) -> Array[int]:
+	var out: Array[int] = []
+	for i in AI_LABELS.size():
+		var d := 1
+		if i < diffs.size():
+			d = int(diffs[i])
+		out.append(clampi(d, 0, DIFF_NAMES.size() - 1))
+	return out
+
 ## 随机种子。用独立 RNG 而不是 Time.get_ticks_msec()：
-## 时间戳是毫秒精度，玩家连续点两次"随机"很容易落在同一毫秒里，
+## 时间戳是毫秒精度，玩家连续点两次「重开」很容易落在同一毫秒里，
 ## 拿到同一张地图还以为没生效。上面 + 一个自增计数兜底，撞种子就不可能了。
+##
+## 也**别用全局 randomize()**：那会污染 AI 的随机流（同一局的手感会变）。
+## 这个实例不 seed()，构造时已自动随机化。
 var _roll_rng := RandomNumberGenerator.new()
 var _roll_count := 0
 

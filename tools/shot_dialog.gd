@@ -1,10 +1,12 @@
 extends SceneTree
 
-## 重开面板的交互校验：截图工具只负责静态画面，点不到按钮。
-## 这里手动驱动 HUD 的浮层，抓 3 张图：
-##   1. 面板打开的样子（定位 / 遮挡 / 有没有超出屏幕）
-##   2. 输入了非数字时被输入框直接挡掉（种子只能是数字）
-##   3. 真正走一遍"确定"按钮，确认信号连到 director 且棋盘真的换了
+## 「新开一局」弹窗的渲染 + 真实点击校验（**必须去掉 --headless**）。
+##
+## 单测（test_setup_dialog.gd）验的是"状态对不对"，这里验的是"玩家真点得到"：
+##   · 开局时弹窗**自己**弹出来（不点任何按钮），且不挡住背后的棋盘；
+##   · 用 root.push_input 发真实鼠标点击给「困难」按钮 → 选中真的变了；
+##   · 点「开始游戏」→ 对局按选中的难度开出来，棋盘换成新种子，弹窗收起；
+##   · 局中点「重开一局」→ 弹窗重开、回填本局难度、「取消」可用。
 ##
 ## 跑法（必须去掉 --headless，否则截不了图）：
 ##   Godot --path . --resolution 1280x720 --script res://tools/shot_dialog.gd
@@ -13,15 +15,15 @@ extends SceneTree
 ## 传别的值只会改窗口、不改视口（stretch=canvas_items），
 ## 排版按 1280x720 算完再缩放，坐标全对不上。
 ##
-## 会把图写到 /tmp/ 下面，并在日志里打印关键状态。
+## 图写到 user://，日志里会打印实际绝对路径。
 
-## 图写到 user://（跨平台），日志里会打印实际绝对路径。
 const OUT := "user://dlg"
 
 var _scene: Node
 var _step := 0
 var _shots: Array[String] = []
 var _fails := 0
+var _seed_before := 0
 
 func _initialize() -> void:
 	var packed := load("res://scenes/main.tscn")
@@ -31,25 +33,29 @@ func _initialize() -> void:
 
 func _on_frame() -> void:
 	_step += 1
-	if _step == 5:
-		_open_dialog()
-	elif _step == 8:
-		_snap("%s_1_open.png" % OUT)
-		_type_bad_seed()
-	elif _step == 11:
-		_verify_sanitize()
-		_snap("%s_2_bad_input.png" % OUT)
-		_type_good_seed()
-	elif _step == 14:
-		_snap("%s_3_typed.png" % OUT)
-		_fire()
-	elif _step == 40:
-		_verify_3()
-	elif _step == 44:
-		_snap("%s_4_after.png" % OUT)
-		_finish()
-	elif _step > 46:
-		return
+	match _step:
+		12:
+			_verify_opening()
+		13:
+			_snap("%s_1_open.png" % OUT)
+		14:
+			_click_difficulty(0, 2)      # 小红 -> 困难（真实鼠标点击）
+		16:
+			_verify_pick(0, 2)
+			_snap("%s_2_picked.png" % OUT)
+		17:
+			_click_start()
+		40:
+			_verify_started()
+		41:
+			_snap("%s_3_playing.png" % OUT)
+		42:
+			_open_restart()
+		44:
+			_verify_reopen()
+			_snap("%s_4_restart.png" % OUT)
+		45:
+			_finish()
 
 func _hud() -> HUD:
 	return _scene.get_node("HUD")
@@ -57,62 +63,164 @@ func _hud() -> HUD:
 func _director() -> GameDirector:
 	return _scene.get_node("GameDirector")
 
-func _open_dialog() -> void:
+## 开局弹窗应该在没有任何点击的情况下自己出现
+func _verify_opening() -> void:
 	var hud := _hud()
 	var dir := _director()
-	print(">> 打开重开面板（当前种子 %d）" % dir.seed_value)
-	hud.show_dialog(dir.seed_value)
-	# 浮层尺寸全靠 anchor 猜不得，打出来看
-	var vp := root.get_visible_rect()
-	print("   视口 %s · 浮层 size=%s pos=%s" % [vp.size, hud._dlg.size, hud._dlg.position])
-	var center := hud._dlg.get_child(1)
-	var card := center as Control
+	print("--- 开局自动弹窗 ---")
+	if not hud._dlg.visible:
+		print("  [FAIL] 开局时弹窗没自己弹出来")
+		_fails += 1
+	else:
+		print("  [ok]   开局弹窗自动出现")
+	if dir.ctl != null:
+		print("  [FAIL] 弹窗还开着就已经开局了")
+		_fails += 1
+	print("   视口 %s · 浮层 size=%s" % [root.get_visible_rect().size, hud._dlg.size])
+	var card := hud._dlg.get_child(1) as Control
 	print("   卡片 size=%s pos=%s（居中应在 x=%.0f）" % [
-		card.size, card.position, (vp.size.x - card.size.x) * 0.5])
-	var edit := hud._seed_edit
-	print("   输入框 size=%s pos=%s" % [edit.size, edit.position])
+		card.size, card.position, (root.get_visible_rect().size.x - card.size.x) * 0.5])
+	if absf(card.position.x - (root.get_visible_rect().size.x - card.size.x) * 0.5) > 1.0:
+		print("  [FAIL] 卡片没有水平居中")
+		_fails += 1
+	if _count(hud._dlg, "LineEdit") > 0:
+		print("  [FAIL] 弹窗里还有输入框（种子应该改成每局随机）")
+		_fails += 1
+	else:
+		print("  [ok]   弹窗里没有种子输入框")
+	if _hud()._btn_dlg_cancel.visible:
+		print("  [FAIL] 开局前不该有「取消」")
+		_fails += 1
+	_seed_before = dir.seed_value
 
-func _type_bad_seed() -> void:
+## 真实点击：走 Viewport → GUI 的完整输入通路，不是直接 emit pressed
+func _click_difficulty(row: int, diff: int) -> void:
 	var hud := _hud()
-	hud._seed_edit.text = ""
-	hud._seed_edit.grab_focus()
-	print(">> 真实键盘输入 'a b 1 2 c'，期望只剩 '12'")
-	for ch in ["a", "b", "1", "2", "c"]:
-		_key(ch)
+	var b: Button = hud._diff_btns[row][diff]
+	var pos := b.get_global_rect().get_center()
+	print(">> 点「%s」的「%s」（按钮中心 %s）" % [
+		GameDirector.AI_LABELS[row], GameDirector.DIFF_NAMES[diff], pos])
+	_click(pos)
 
-func _type_good_seed() -> void:
+func _verify_pick(row: int, diff: int) -> void:
 	var hud := _hud()
-	hud._seed_edit.text = ""
-	hud._seed_edit.grab_focus()
-	print(">> 真实键盘输入 '314159'，期望原样保留")
-	for ch in ["3", "1", "4", "1", "5", "9"]:
-		_key(ch)
+	var sel := hud.selected_difficulties()
+	print("--- 点选校验 ---")
+	print("   当前选择 %s（期望第 %d 位 = %d）" % [str(sel), row, diff])
+	if sel[row] != diff:
+		print("  [FAIL] 点击没选中「%s」" % GameDirector.DIFF_NAMES[diff])
+		_fails += 1
+	else:
+		print("  [ok]   真实点击能选中难度")
+	# 同一行只允许亮一个
+	var lit := 0
+	for b in hud._diff_btns[row]:
+		if (b as Button).button_pressed:
+			lit += 1
+	if lit != 1:
+		print("  [FAIL] 该行同时亮了 %d 档（应互斥）" % lit)
+		_fails += 1
 
-## 喂一个真实按键事件，走和玩家打字完全相同的路径。
-##
-## ⚠️ 千万别用 `_seed_edit.text = "..."` 代替：LineEdit 程序化赋值**不会**
-## 触发 text_changed（实测 hits=[]），那样测不到任何"输入即处理"的逻辑，
-## 只会得到一个假阳性/假阴性。必须走 Viewport 输入链。
-## 另外 gui_input 是**信号**不是方法，不能直接调用 —— 用 root.push_input()。
-func _key(ch: String) -> void:
-	var ev := InputEventKey.new()
-	ev.pressed = true
-	ev.unicode = ch.unicode_at(0)
-	ev.keycode = OS.find_keycode_from_string(ch)
-	root.push_input(ev)
-
-func _fire() -> void:
-	var hud := _hud()
-	var dir := _director()
-	print(">> 点「确定」（输入框里是 %s）" % hud._seed_edit.text)
-	var before := dir.seed_value
-	var ok := _find_button(hud._dlg, "确定")
+func _click_start() -> void:
+	var ok := _find_button(_hud()._dlg, "开始游戏")
 	if ok == null:
-		print("  [FAIL] 找不到「确定」按钮 —— 手打的种子将无法提交")
+		print("  [FAIL] 找不到「开始游戏」按钮")
 		_fails += 1
 		return
-	ok.pressed.emit()
-	print("   信号发出后 seed_value: %d -> %d" % [before, dir.seed_value])
+	_click(ok.get_global_rect().get_center())
+
+func _verify_started() -> void:
+	var dir := _director()
+	var hud := _hud()
+	print("--- 开局校验 ---")
+	if dir.ctl == null:
+		print("  [FAIL] 点了「开始游戏」还没开局")
+		_fails += 1
+		return
+	if hud._dlg.visible:
+		print("  [FAIL] 开局后弹窗没收起")
+		_fails += 1
+	else:
+		print("  [ok]   开始游戏后弹窗收起")
+	if dir.ai_difficulties[0] != 2:
+		print("  [FAIL] 难度没生效：%s" % str(dir.ai_difficulties))
+		_fails += 1
+	else:
+		print("  [ok]   难度按选择的生效 %s" % str(dir.ai_difficulties))
+	if dir.seed_value == _seed_before:
+		print("  [FAIL] 种子没变（每局必须随机）")
+		_fails += 1
+	else:
+		print("  [ok]   换了一张新地图（种子 %d）" % dir.seed_value)
+	if dir.ctl.st.board.seed_used != dir.seed_value:
+		print("  [FAIL] 棋盘种子不符：%d" % dir.ctl.st.board.seed_used)
+		_fails += 1
+	var errs: Array = dir.ctl.st.board.self_check(true)
+	if errs.is_empty():
+		print("  [ok]   新棋盘自检通过")
+	else:
+		for e in errs:
+			print("  [FAIL] %s" % e)
+		_fails += 1
+	var logged := false
+	for line in dir.ctl.st.log_lines:
+		if "每局随机" in line:
+			logged = true
+			print("  [ok]   事件日志记录了随机种子: %s" % line.strip_edges())
+	if not logged:
+		print("  [FAIL] 事件日志里没有种子说明")
+		_fails += 1
+
+## 局中点「重开一局」：弹窗要回填本局难度、且「取消」可用
+func _open_restart() -> void:
+	var btn := _find_button(_hud(), "重开一局")
+	if btn == null:
+		print("  [FAIL] 找不到「重开一局」按钮")
+		_fails += 1
+		return
+	_click(btn.get_global_rect().get_center())
+
+func _verify_reopen() -> void:
+	var hud := _hud()
+	var dir := _director()
+	print("--- 局中重开弹窗 ---")
+	if not hud._dlg.visible:
+		print("  [FAIL] 点「重开一局」没打开弹窗")
+		_fails += 1
+		return
+	print("  [ok]   弹窗已打开")
+	if not hud._btn_dlg_cancel.visible:
+		print("  [FAIL] 局中打开时「取消」应该可见")
+		_fails += 1
+	if hud.selected_difficulties() != dir.ai_difficulties:
+		print("  [FAIL] 没有回填本局难度：%s vs %s" % [
+			str(hud.selected_difficulties()), str(dir.ai_difficulties)])
+		_fails += 1
+	else:
+		print("  [ok]   回填了本局难度 %s" % str(dir.ai_difficulties))
+
+## 发一次真实左键点击（走完整的输入通路：Viewport -> GUI -> _unhandled_input）。
+## ⚠️ 必须「按下 + 抬起」两个事件都发：Godot 的 Button 默认
+## action_mode = ACTION_MODE_BUTTON_RELEASE，只发按下**不会**触发 pressed
+## （棋盘是按下即响应，所以别照抄 shot_help 里那个只发按下的版本）。
+func _click(pos: Vector2) -> void:
+	# 先移一下鼠标：按钮的 hover 状态与"点在不在里面"都靠它对齐，
+	# 少了这一步，某些情况下按下事件到不了按钮。
+	var mv := InputEventMouseMotion.new()
+	mv.position = pos
+	root.push_input(mv)
+	for pressed in [true, false]:
+		var ev := InputEventMouseButton.new()
+		ev.button_index = MOUSE_BUTTON_LEFT
+		ev.pressed = pressed
+		ev.position = pos
+		root.push_input(ev)
+
+func _count(n: Node, cls: String) -> int:
+	var c := 1 if n.get_class() == cls else 0
+	for ch in n.get_children():
+		c += _count(ch, cls)
+	return c
 
 func _find_button(n: Node, label: String) -> Button:
 	if n is Button and (n as Button).text == label:
@@ -122,66 +230,6 @@ func _find_button(n: Node, label: String) -> Button:
 		if r != null:
 			return r
 	return null
-
-func _verify_sanitize() -> void:
-	var hud := _hud()
-	print("--- 输入过滤校验 ---")
-	print("  非数字被挡后的内容: '%s'（期望 '12'）" % hud._seed_edit.text)
-	if hud._seed_edit.text != "12":
-		print("  [FAIL] 非数字没被挡掉")
-		_fails += 1
-	else:
-		print("  [ok]   非数字被挡在输入框外")
-	var names := ["随机一局", "沿用本局", "取消", "确定"]
-	var missing := ""
-	for nm in names:
-		if _find_button(hud._dlg, nm) == null:
-			missing += nm + " "
-	if missing != "":
-		print("  [FAIL] 缺按钮: %s" % missing)
-		_fails += 1
-	else:
-		print("  [ok]   随机一局 / 沿用本局 / 取消 / 确定 四个按钮都在")
-
-func _verify_3() -> void:
-	var dir := _director()
-	var ctl := dir.ctl
-	print("--- 校验 ---")
-	if dir.seed_value == 314159:
-		print("  [ok]   director 收到种子 314159")
-	else:
-		print("  [FAIL] 种子没生效: %d" % dir.seed_value)
-		_fails += 1
-	# 日志里应该写了新种子
-	var found := false
-	for line in ctl.st.log_lines:
-		if "314159" in line:
-			found = true
-			print("  [ok]   事件日志记录了新种子: %s" % line.strip_edges())
-	if not found:
-		print("  [FAIL] 事件日志里找不到新种子")
-		_fails += 1
-	# 浮层必须已经收起来，否则会挡住棋盘
-	if _hud()._dlg.visible:
-		print("  [FAIL] 重开后浮层没收起")
-		_fails += 1
-	else:
-		print("  [ok]   重开后浮层已收起")
-	# 棋盘确实是新生成的（种子变了必然变，但要确认没崩）
-	if ctl.st.board.seed_used == 314159:
-		print("  [ok]   棋盘用新种子重建 (seed_used=%d)" % ctl.st.board.seed_used)
-	else:
-		print("  [FAIL] 棋盘种子不符: %d" % ctl.st.board.seed_used)
-		_fails += 1
-	var errs: Array = ctl.st.board.self_check(true)
-	if errs.is_empty():
-		print("  [ok]   新棋盘自检通过")
-	else:
-		for e in errs:
-			print("  [FAIL] %s" % e)
-		_fails += 1
-	# 上一局的日志必须还在（日志只增不减）
-	print("  日志总条数: %d（含历史）" % ctl.st.log_lines.size())
 
 func _snap(path: String) -> void:
 	var img := root.get_texture().get_image()

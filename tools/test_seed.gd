@@ -1,9 +1,17 @@
 extends SceneTree
 
-## 验证重开一局的种子解析规则。
+## 验证「棋盘每局随机」这件事本身：
+##   · 不同种子必须真的换一张地图、同种子必须可复现；
+##   · 官方数字摆放规则（6/8 不相邻等）不因为随机而破；
+##   · 连续取种子不能撞。
+##
 ## 跑法：Godot --headless --path . --script res://tools/test_seed.gd
 ##
-## 注意 _resolve / _roll_seed 是从 GameDirector 复制过来的副本，不是引用。
+## ⚠️ 这里曾经还测过"种子输入框的文本怎么解析"（空串=沿用、'r'=随机…）。
+## 那个功能已经**删除**了 —— 开局弹窗不再有种子输入框，种子由 GameDirector
+## 每局自动滚动。别把解析规则又加回来（要复现某张图请用命令行 --seed=NNN）。
+##
+## 注意 _roll_seed 是从 GameDirector 复制过来的副本，不是引用。
 ## 这不是为了偷懒：GameDirector 是 Node，headless 下不方便在不进场景树的情况下
 ## 单独 new 出来调私有方法。改那边时记得同步改这边，否则这条断言就形同虚设。
 
@@ -14,18 +22,6 @@ var _roll_rng := RandomNumberGenerator.new()
 var _roll_count := 0
 
 func _initialize() -> void:
-	# --- 解析规则 ---
-	_check("空串 -> 沿用当前种子", _resolve("", 111) == 111)
-	_check("纯空格 -> 沿用当前种子", _resolve("   ", 111) == 111)
-	_check("'r' -> 随机（不该等于当前种子）", _resolve("r", 111) != 111)
-	_check("'随机' -> 随机", _resolve("随机", 111) != 111)
-	_check("整数 20261005 -> 原样", _resolve("20261005", 111) == 20261005)
-	_check("带空格 ' 42 ' -> 42", _resolve(" 42 ", 111) == 42)
-	_check("负数 -> 原样", _resolve("-7", 111) == -7)
-	_check("0 -> 0（0 是合法种子，不能当空处理）", _resolve("0", 111) == 0)
-	_check("非法 'abc' -> 沿用当前种子", _resolve("abc", 111) == 111)
-	_check("非法 '12ab' -> 沿用当前种子", _resolve("12ab", 111) == 111)
-
 	# --- 不同种子必须真的换地图（这是本需求的核心）---
 	var a := Board.generate(1, true)
 	var b := Board.generate(2, true)
@@ -110,15 +106,7 @@ func _same_terrain_clash(b: Board) -> int:
 				v += 1
 	return v / 2
 
-## 与 GameDirector._on_restart 里的解析规则保持一致
-func _resolve(text: String, cur: int) -> int:
-	var t := text.strip_edges()
-	if t == "r" or t == "随机":
-		return _roll_seed()
-	if t.is_valid_int():
-		return int(t)
-	return cur
-
+## 与 GameDirector._roll_seed 保持一致
 func _roll_seed() -> int:
 	_roll_count += 1
 	return _roll_rng.randi() + _roll_count

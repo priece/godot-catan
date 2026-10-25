@@ -18,9 +18,12 @@ signal play_dev_pressed(card: int, r: int, r1: int, r2: int)
 signal bank_trade_pressed(give_r: int, take_r: int)
 ## 「掷骰子」按钮：只在回合开始的"掷骰前"窗口里有效
 signal roll_dice_pressed
-## 参数是种子输入框的文本："" = 沿用上一局，"r" = 随机，
-## 其他字符串交给 GameDirector 解析（非法值它自己兜底）。
-signal restart_pressed(seed_text: String)
+## 「新开一局」弹窗里点了「开始游戏」（局中点「重开一局」走的是同一个弹窗）。
+## 参数是三个电脑的难度数组，下标对齐 GameDirector.AI_LABELS：
+##   [小红, 小橙, 小绿] = [0 简单 / 1 标准 / 2 困难, ...]
+## 棋盘种子**不在这个信号里** —— 每局由 GameDirector 自己随机，
+## 玩家不需要（也不该）碰种子。
+signal new_game_pressed(diffs: Array)
 
 ## 面板宽度固定；x 位置不再写死，而是贴视口右缘（见 _apply_layout）。
 const PANEL_W := 384.0
@@ -35,12 +38,29 @@ const DEV_TIP := {
 	Res.Dev.MONOPOLY: "指定 1 种资源，把所有对手手里的该资源全部收走",
 }
 
-## "重开一局"是破坏性操作（会丢掉当前进度），所以点开一个面板让玩家
-## 看清要发生什么、顺便选种子，替代原来"点两下"的裸确认。
+## 三档难度的说明，挂在选项按钮的 tooltip 上（难度名本身只有两个字，
+## 新玩家看不出差别）。下标 = PlayerState.difficulty。
+const DIFF_TIP := {
+	0: "简单：决策粗糙、偶尔失误，适合第一次玩",
+	1: "标准：会算产出与概率，会跟你抢好位置",
+	2: "困难：会针对性卡你，给资源定价也最狠",
+}
+
+## 「重开一局」是破坏性操作（会丢掉当前进度），所以点开一个面板让玩家
+## 看清要发生什么。这个面板同时也是**开局面板**：开局前就用它给三个电脑
+## 各选一档难度（见 show_new_game_dialog）。
+##
+## 种子没有输入框：每局都自动随机，玩家不用管；要钉住某张地图排查问题，
+## 用命令行 `--seed=NNN`（GameDirector 里解析）。
 var _dlg: Control
-var _seed_edit: LineEdit
-var _seed_hint: Label
-var _cur_seed := 0                  ## GameDirector 每局开始时告知的当前种子
+var _diff_hint: Label
+## [AI 序号][难度] -> Button，下标对齐 GameDirector.AI_LABELS / DIFF_NAMES
+var _diff_btns: Array = []
+## 本局正在用的难度（GameDirector 每局开始时告知），
+## 局中点「重开一局」时回填到弹窗上，玩家看到的就是"现在的设置"。
+var _cur_diffs: Array = []
+var _btn_dlg_cancel: Button
+var _cur_seed := 0                  ## GameDirector 每局开始时告知的当前种子（仅调试展示）
 
 var _row_chips: Array = []      ## 每行：颜色块
 var _row_names: Array = []      ## 每行：名字标签
@@ -134,6 +154,8 @@ func _ready() -> void:
 	# 而不是留在设计稿的 x=896 —— 否则右缘会露出一条海色。
 	get_viewport().size_changed.connect(_apply_layout)
 	_apply_layout()
+	# 开局弹窗背后露出的是"还没开局"的空面板，先把它收拾干净
+	show_idle()
 	_build_trade_dialog()
 	# 三个发展卡弹窗按"层级从下到上"的顺序建：后加的子节点盖在前面之上，
 	# 所以二级弹窗（垄断/丰收）要建在选卡弹窗之后。
@@ -141,14 +163,14 @@ func _ready() -> void:
 	# 卡片高度依赖说明文字换行后的实际排版，得等一帧布局完再居中
 	await _build_dialog()
 
-## 重开面板：显示当前种子，可以手打一个新种子，也可以点两个快捷方式。
-## 用 LineEdit 而非 SpinBox：种子就是个 9 位整数，用不着加减按钮，
-## 而且键盘直接打字比点箭头快得多。
+## 「新开一局」面板：给三个电脑各选一档难度，点「开始游戏」发牌。
 ##
-## 按钮分两层，别搞混：
-##   · 「随机一局」「沿用本局」是**快捷方式**，点了立刻重开（会用它们的值覆盖输入框）；
-##   · 「确定」是**主操作**，提交输入框里手打的种子。
-## 之前只有前者、没有后者，导致手打的种子无处提交（看 _submit_seed 的注释）。
+## 这里**没有种子输入框**：棋盘每局自动随机（旧版要玩家手打 9 位数字，
+## 纯属负担，而且"改了数字没生效"根本看不出来）。要复现某张地图，
+## 用命令行 `--seed=NNN` —— 那是开发者的需求，不该出现在玩家界面上。
+##
+## 同一个面板既是开局面板（开局前弹出、只能「开始游戏」）、
+## 也是局中「重开一局」的确认面板（多一个「取消」= 留在本局）。
 func _build_dialog() -> void:
 	_dlg = Control.new()
 	_dlg.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -183,77 +205,85 @@ func _build_dialog() -> void:
 	box.add_theme_constant_override("separation", 9)
 	card.add_child(box)
 
-	box.add_child(_label("重开一局", 15, UIPalette.INK, true))
+	box.add_child(_label("新开一局", 16, UIPalette.INK, true))
 
-	_seed_hint = _label("", 11, UIPalette.MUTED, false)
-	_seed_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_seed_hint.custom_minimum_size = Vector2(280, 0)
-	box.add_child(_seed_hint)
+	_diff_hint = _label("", 11, UIPalette.MUTED, false)
+	_diff_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_diff_hint.custom_minimum_size = Vector2(288, 0)
+	box.add_child(_diff_hint)
 
-	_seed_edit = LineEdit.new()
-	_seed_edit.placeholder_text = "留空 = 沿用上一局棋盘"
-	_seed_edit.max_length = 12
-	_seed_edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
-	# Godot 默认主题是暗色的，LineEdit 不覆盖样式就会在白卡片上出现
-	# 一条深灰输入框 + 深色提示字，几乎看不见。
-	_seed_edit.add_theme_stylebox_override("normal", _input_style())
-	_seed_edit.add_theme_stylebox_override("focus", _input_style(true))
-	# ⚠️ 是 add_theme_color_override，不是 add_theme_font_color_override。
-	# 后者在 Godot 4 里根本不存在，写了不会报编译错、只在运行时喷一行
-	# SCRIPT ERROR 然后静默跳过 —— 表现就是种子输入框的字还是默认近白色，
-	# 打在白卡片上几乎看不见。别照抄 Godot 3 的 add_color_override。
-	_seed_edit.add_theme_color_override("font_color", UIPalette.INK)
-	_seed_edit.add_theme_color_override("font_uneditable_color", UIPalette.INK)
-	_seed_edit.add_theme_color_override("font_placeholder_color", Color(0.62, 0.61, 0.59))
-	_seed_edit.add_theme_color_override("caret_color", UIPalette.INK)
-	_seed_edit.add_theme_constant_override("minimum_character_width", 6)
-	_seed_edit.text_changed.connect(_on_seed_text_changed)
-	# 回车 = 确定。不接这个玩家会以为"打完了按回车没反应 = 输入框坏了"。
-	_seed_edit.text_submitted.connect(func(_t: String): _fire_restart())
-	box.add_child(_seed_edit)
+	# 每个电脑一行：左边名字（用他自己棋子的颜色），右边三档难度互斥选择。
+	# 用 toggle + ButtonGroup 而不是 OptionButton 下拉：三档一眼全看见，
+	# 手机上也少一次"点开再选"；而且"选了哪档"必须能直接看出来。
+	#
+	# ⚠️ ButtonGroup 是**共享**的：同一时刻每个电脑只能选中一档。三个电脑各占
+	# 一组（每组 3 个按钮），所以这里在循环外只 new 一次、整行共用 ——
+	# 一行 3 个按钮同组，行与行之间互不影响。
+	for i in GameDirector.AI_LABELS.size():
+		var group := ButtonGroup.new()
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 6)
+		box.add_child(row)
 
-	# 两个快捷方式放在输入框下面。它们先填内容再提交，
-	# 保证"输入框里显示的"永远等于"实际用的种子"。
-	var quick := HBoxContainer.new()
-	quick.add_theme_constant_override("separation", 8)
-	box.add_child(quick)
+		var nm := _label(GameDirector.AI_LABELS[i], 12, UIPalette.player_color(i + 1), true)
+		nm.custom_minimum_size = Vector2(38, 0)
+		nm.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		row.add_child(nm)
 
-	var rnd := _button("随机一局")
-	rnd.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	rnd.tooltip_text = "换一个随机种子，生成全新地图"
-	rnd.pressed.connect(func(): _submit_seed("r"))
-	quick.add_child(rnd)
+		var btns: Array = []
+		for d in GameDirector.DIFF_NAMES.size():
+			var b := _button(GameDirector.DIFF_NAMES[d], false, 12, 7, 7)
+			b.toggle_mode = true
+			b.button_group = group
+			b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			b.tooltip_text = DIFF_TIP[d]
+			# 选中态单独画成蓝底白字：_button 默认的 pressed 样式是浅蓝，
+			# 和 hover 几乎同色 —— 触屏上没有 hover 对比，玩家看不出选了哪档。
+			# ⚠️ hover_pressed 也要覆盖：只盖 pressed 的话，鼠标悬停到已选中的
+			# 按钮上会掉回 Godot 默认主题的暗色样式（白字直接看不见）。
+			b.add_theme_stylebox_override("pressed", _diff_on_style(false))
+			b.add_theme_stylebox_override("hover_pressed", _diff_on_style(true))
+			b.add_theme_color_override("font_pressed_color", Color(1, 1, 1))
+			b.add_theme_color_override("font_hover_pressed_color", Color(1, 1, 1))
+			row.add_child(b)
+			btns.append(b)
+		_diff_btns.append(btns)
 
-	var keep := _button("沿用本局")
-	keep.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	keep.tooltip_text = "同一张棋盘重开，方便复盘刚才的局面"
-	keep.pressed.connect(func(): _submit_seed(""))
-	quick.add_child(keep)
+	# 主操作行：取消 + 开始游戏。
+	# 「取消」在开局前是隐藏的（那时没有"本局"可回），局中重开时才出现。
+	var row2 := HBoxContainer.new()
+	row2.add_theme_constant_override("separation", 8)
+	box.add_child(row2)
 
-	# 主操作行：取消 + 确定。
-	# ⚠️ 「确定」不能省。以前只有"随机一局 / 沿用本局"两个按钮，
-	# 而它们都会先覆盖输入框（填 "r" / 清空）再重开 ——
-	# 于是玩家手打的种子**没有任何按钮能提交它**，表现就是
-	# "输入框能打字，但输什么都白输"，看起来像输入框坏了。
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	box.add_child(row)
+	_btn_dlg_cancel = _button("取消")
+	_btn_dlg_cancel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_btn_dlg_cancel.pressed.connect(close_dialog)
+	row2.add_child(_btn_dlg_cancel)
 
-	var cancel := _button("取消")
-	cancel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	cancel.pressed.connect(close_dialog)
-	row.add_child(cancel)
-
-	var ok := _button("确定", true)
+	var ok := _button("开始游戏", true)
 	ok.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	ok.tooltip_text = "用输入框里的种子重开（留空 = 沿用本局）"
-	ok.pressed.connect(_fire_restart)
-	row.add_child(ok)
+	ok.tooltip_text = "按上面选好的难度开一局；棋盘自动随机生成"
+	ok.pressed.connect(_fire_new_game)
+	row2.add_child(ok)
 
 	# 内容都挂完了，这时才知道真实高度（说明文字会换行，事先算不准）。
 	# 放在 add_child 之后读 size、算居中位置 —— 排版完成前读到的是 0。
 	await get_tree().process_frame
 	_center_card(card)
+
+## 难度按钮的"已选中"样式：与主按钮同色系的蓝底，白字（字色在调用处覆盖）。
+## hover 版本稍微提亮一点，否则鼠标压上去像"没反应"。
+func _diff_on_style(hover: bool) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.243, 0.502, 0.878) if hover else Color(0.184, 0.435, 0.816)
+	sb.border_color = Color(0.133, 0.329, 0.655)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(7)
+	sb.content_margin_left = 10
+	sb.content_margin_right = 10
+	sb.content_margin_top = 7
+	sb.content_margin_bottom = 7
+	return sb
 
 func _center_card(card: Control, width: float = 320.0) -> void:
 	var vp := get_viewport().get_visible_rect().size
@@ -261,14 +291,6 @@ func _center_card(card: Control, width: float = 320.0) -> void:
 	var h: float = maxf(maxf(card.size.y, card.get_combined_minimum_size().y), 150.0)
 	card.size = Vector2(width, h)
 	card.position = ((vp - card.size) * 0.5).round()
-
-func _input_style(focused: bool = false) -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.98, 0.98, 0.97)
-	sb.border_color = Color(0.62, 0.71, 0.80) if focused else Color(0.82, 0.81, 0.78)
-	sb.set_border_width_all(2 if focused else 1)
-	sb.set_corner_radius_all(7)
-	return sb
 
 ## 卡片样式。pad 是内容到边框的内边距 ——
 ## ⚠️ StyleBoxFlat 的 content_margin 默认是 0，不显式设就会让内容直接贴着
@@ -287,70 +309,72 @@ func _card_style(pad: float = 16.0) -> StyleBoxFlat:
 	sb.content_margin_bottom = pad
 	return sb
 
-## 种子只可能是数字，所以直接把非数字字符挡在输入框外。
-## 比"允许输入再标红报错"更省事：玩家根本打不出非法种子，
-## 也就不存在"点了确定才发现没生效"的挫败感。
+## 打开「新开一局」弹窗。
 ##
-## ⚠️ 在 text_changed 里改 text 会再次触发 text_changed，必须用
-## _sanitizing 挡住递归，否则死循环。
-var _sanitizing := false
-
-func _on_seed_text_changed(t: String) -> void:
-	if _sanitizing:
-		return
-	var clean := ""
-	for i in t.length():
-		if t[i].is_valid_int():
-			clean += t[i]
-	if clean == t:
-		return
-	_sanitizing = true
-	# 光标位置按"删掉了几个字符"往回补，别让它跳到末尾（中途改字会很难受）
-	_seed_edit.text = clean
-	_seed_edit.caret_column = mini(_seed_edit.caret_column, clean.length())
-	_sanitizing = false
-
-## 快捷按钮：先把种子写进输入框，再提交。
-## 这样"输入框里是什么"和"实际用了什么种子"永远一致 ——
-## 玩家不会出现"手打了数字，点个按钮却被悄悄覆盖掉"的情况。
-func _submit_seed(t: String) -> void:
-	_seed_edit.text = t
-	_fire_restart()
-
-## 点"重开一局"时由 GameDirector 告知当前种子，显示出来方便玩家照着换
-func show_dialog(cur_seed: int) -> void:
-	_seed_hint.text = "当前棋盘种子 %d。改个数字就换一张地图；" % cur_seed \
-		+ "留空（或点「沿用本局」）则用同一个种子重开。事件日志会保留。"
-	# 预填当前种子 + 全选：想换图就改一位数字（全选后直接打会把整串替换掉），
-	# 想重打就全选后直接输入。空着让玩家从零敲 9 位数字纯属折磨。
-	_seed_edit.text = str(cur_seed)
+## diffs = 三个电脑的难度（会被回填到选项上，玩家看到的就是"现在的设置"）；
+## can_cancel = 局中打开为 true（取消 = 留在本局）。**开局前必须传 false** ——
+## 那时没有"本局"可回，留一个能点的取消只会得到一张空棋盘。
+func show_new_game_dialog(diffs: Array, can_cancel: bool) -> void:
+	select_difficulties(diffs)
+	_cur_diffs = diffs.duplicate()
+	if can_cancel:
+		_diff_hint.text = "当前棋盘种子 %d。改难度会立刻重开一局，事件日志保留。" % _cur_seed
+	else:
+		_diff_hint.text = "棋盘每局自动随机，不用输种子。给三个电脑各选一档难度吧。"
+	_btn_dlg_cancel.visible = can_cancel
 	_dlg.visible = true
 	# 每次打开都重算一次：分辨率被改过、或窗口尺寸变了，居中位置会过期
 	_center_card(_dlg.get_child(1) as Control)
-	# 打开就聚焦并全选：玩家多半是想直接改数字
-	_seed_edit.grab_focus()
-	_seed_edit.select_all()
+
+## 把难度数组回填到按钮上（越界值夹到合法范围，缺的补"标准"）。
+## 单独抽出来是因为 headless 单测要直接验"回填对不对"，不必去点按钮。
+func select_difficulties(diffs: Array) -> void:
+	for i in _diff_btns.size():
+		var d: int = 1
+		if i < diffs.size():
+			d = int(diffs[i])
+		d = clampi(d, 0, GameDirector.DIFF_NAMES.size() - 1)
+		(_diff_btns[i][d] as Button).button_pressed = true
+
+## 当前选中的难度（读按钮的 toggle 状态，是唯一真源 ——
+## 不额外维护一份 _sel 数组，免得两处不同步）
+func selected_difficulties() -> Array:
+	var out: Array = []
+	for i in _diff_btns.size():
+		var sel := -1
+		for d in (_diff_btns[i] as Array).size():
+			if (_diff_btns[i][d] as Button).button_pressed:
+				sel = d
+		out.append(sel if sel >= 0 else 1)
+	return out
 
 func close_dialog() -> void:
 	_dlg.visible = false
 
-func _fire_restart() -> void:
-	var t := _seed_edit.text.strip_edges()
+func _fire_new_game() -> void:
+	var diffs := selected_difficulties()
 	close_dialog()
-	restart_pressed.emit(t)
+	new_game_pressed.emit(diffs)
+
+## 局中点标题/网格里的「重开一局」：用当前难度回填，允许取消
+func _open_new_game_dialog() -> void:
+	show_new_game_dialog(_cur_diffs, true)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return
 	if _dlg.visible:
 		if event.keycode == KEY_ESCAPE:
-			# Esc 关掉浮层，别让玩家以为游戏卡住了
-			close_dialog()
+			# 局中重开：Esc = 取消。
+			# 开局前没有"本局"可回，Esc 不关 —— 否则会留下一张空棋盘，
+			# 玩家还得自己找「重开一局」把面板叫回来。
+			if _btn_dlg_cancel.visible:
+				close_dialog()
 			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
-			# 输入框有焦点时回车走 LineEdit.text_submitted，这里兜住
-			# "焦点跑到别处（比如点了快捷按钮）后按回车"的情况。
-			_fire_restart()
+			# 回车 = 开始游戏。焦点可能停在任何刚点过的难度按钮上，
+			# 靠按钮自己的 pressed 兜不住，这里统一收口。
+			_fire_new_game()
 			get_viewport().set_input_as_handled()
 	elif _log_dlg != null and _log_dlg.visible:
 		# 日志弹窗层紧跟重开弹窗（D6）。重开弹窗是全屏遮罩，打开时点不到面板
@@ -385,13 +409,16 @@ func _unhandled_input(event: InputEvent) -> void:
 			_confirm_trade()
 			get_viewport().set_input_as_handled()
 
-## 新开一局时清掉各种"增量刷新"的缓存，否则新旧界面的按钮可能对不上
-func on_new_game(cur_seed: int) -> void:
+## 新开一局时清掉各种"增量刷新"的缓存，否则新旧界面的按钮可能对不上。
+## diffs = 本局三个电脑的难度（局中点「重开一局」时回填到弹窗上）。
+func on_new_game(cur_seed: int, diffs: Array = []) -> void:
 	_trade_sig = ""
 	_dev_sig = ""
 	_log_count = -1
 	_log_last = ""
 	_cur_seed = cur_seed
+	if not diffs.is_empty():
+		_cur_diffs = diffs.duplicate()
 	close_dialog()
 	close_log_dialog()
 	close_trade_dialog()
@@ -436,8 +463,8 @@ func _build() -> void:
 	# ———— 以下横屏布局：桌面 1280×720 逐像素基线，勿动 ————
 	_btn_restart = _button("重开一局")
 	_btn_restart.add_theme_font_size_override("font_size", 12)
-	_btn_restart.tooltip_text = "放弃当前这局，重新开始（会保留之前的日志）"
-	_btn_restart.pressed.connect(func(): show_dialog(_cur_seed))
+	_btn_restart.tooltip_text = "放弃当前这局，重新开始（可以顺便改对手难度；日志保留）"
+	_btn_restart.pressed.connect(_open_new_game_dialog)
 	title_row.add_child(_btn_restart)
 
 	_status = _label("", 13, UIPalette.INK, true)
@@ -559,8 +586,8 @@ func _build_portrait_actions(box: VBoxContainer) -> void:
 	var slot_restart := _grid_slot()
 	_act_grid.add_child(slot_restart)
 	_btn_restart = _portrait_button("重开一局")
-	_btn_restart.tooltip_text = "放弃当前这局，重新开始（会保留之前的日志）"
-	_btn_restart.pressed.connect(func(): show_dialog(_cur_seed))
+	_btn_restart.tooltip_text = "放弃当前这局，重新开始（可以顺便改对手难度；日志保留）"
+	_btn_restart.pressed.connect(_open_new_game_dialog)
 	slot_restart.add_child(_btn_restart)
 
 	_build_log_dialog()
@@ -732,6 +759,10 @@ func refresh(st: GameState, status: String, can_act: bool, main_phase: bool = tr
 
 	# 掷骰前只留「掷骰子 + 打发展卡」，主阶段才给建造/交易/结束回合。
 	# 隐藏而不是置灰：灰按钮会让玩家以为"再等等就能点"，实际这个窗口里永远点不了。
+	#
+	# 「打发展卡」掷骰前后都能打，永远显示 —— 但开局弹窗背后的空面板会临时把它
+	# 藏起来（见 show_idle），所以这里要显式恢复，别指望它一直是 visible。
+	_btn_play.visible = true
 	if Layout.is_portrait():
 		# 竖屏网格：掷骰子与结束回合共格互斥；买发展卡/兑换只在主阶段出现。
 		# ⚠️ 格子（_slot_*）永远 visible，只藏格内按钮 —— 隐藏格子会让
@@ -749,6 +780,23 @@ func refresh(st: GameState, status: String, can_act: bool, main_phase: bool = tr
 
 	_refresh_trade(st, can_act and main_phase)
 	_refresh_dev_btn(st, can_act)
+
+## 还没开局时的"空面板"外观：把与阶段相关的按钮全藏起来。
+##
+## 开局弹窗就浮在这个状态上（GameDirector 先弹窗、再开局），而 refresh()
+## 此时还没跑过 —— 于是「掷骰子」和「结束回合」会同时挤在竖屏的同一个格子里。
+## 只藏按钮不置灰：这个状态下一秒就会被 refresh() 接管。
+func show_idle() -> void:
+	if Layout.is_portrait():
+		# 隐藏格内按钮，格子本身留着（见 _build_portrait_actions 的说明）
+		for b in [_btn_roll, _btn_end, _btn_buy, _btn_trade]:
+			b.visible = false
+		_fit_portrait_actions()
+	else:
+		_act_row.visible = false
+		_btn_roll.visible = false
+	# 打发展卡也藏（没开局，打了也没意义）；refresh() 会把它恢复
+	_btn_play.visible = false
 
 ## 轮次与骰子
 func set_turn_info(round_no: int, dice: int) -> void:

@@ -286,8 +286,9 @@ stateDiagram-v2
 ### HUD（`CanvasLayer`）
 
 - 右侧面板 **全部代码搭控件**（按钮随状态增删，手写 `.tscn` 维护不动）。
-- **只显示 + 发信号**，判断全在 `GameDirector`。信号：`end_turn_pressed` / `buy_dev_pressed` / `play_dev_pressed(card,r,r1,r2)` / `bank_trade_pressed(give,take)` / `roll_dice_pressed` / `restart_pressed(seed_text)`。
-- 三个弹窗：重开（种子输入）/ 银行兑换 / 发展卡（含垄断选资源、丰收选 2 张）。
+- **只显示 + 发信号**，判断全在 `GameDirector`。信号：`end_turn_pressed` / `buy_dev_pressed` / `play_dev_pressed(card,r,r1,r2)` / `bank_trade_pressed(give,take)` / `roll_dice_pressed` / `new_game_pressed(diffs)`。
+- 四个弹窗：开局/重开（**逐 AI 难度，没有种子输入**——棋盘每局由 `GameDirector` 随机）/ 银行兑换 / 发展卡（含垄断选资源、丰收选 2 张）/ 日志（仅竖屏）。
+- 开局弹窗在**开局前自动弹出**（`auto` 演示模式跳过），`HUD.show_idle()` 负责把弹窗背后那张"还没开局"的空面板收拾干净。
 - 事件日志**全量保留**、跨局延续；自动滚动只在玩家已停在底部时触发。
 - 面板贴**视口右缘**（不写死 x），宽屏/横屏自适应。
 
@@ -306,6 +307,7 @@ stateDiagram-v2
 | headless 测试 | `verify_topology` | 19/54/72 + 度数分布硬断言 |
 | | `test_rules` | 46 条规则单测 |
 | | `test_trade_dialog` / `test_dev_dialog` | 24 / 56 条（含 `begin_turn` 与 `start_turn+roll_dice` 骰子序列一致） |
+| | `test_setup_dialog` | 25 条：开局弹窗逐 AI 难度互斥/回填、**弹窗内不许有输入框**、回车/Esc |
 | | `test_seed` / `test_pick` / `test_safe_area` / `test_legend` / `test_ports` | 生成规则、触屏命中、安全区、图例、港口摆位 |
 | | `sim_runner` | 批量对局 + 胜率矩阵；**强制校验**：棋盘合法 / 资源守恒（银行+玩家 = 每张 19）/ 状态完整性 |
 | 渲染依赖（**禁 headless**） | `screenshot` / `shot_dialog` / `shot_trade_dialog` / `shot_dev_dialog` / `shot_help` / `test_interaction` | 走真实渲染器；`--headless` 会挂在 `frame_post_draw` 上被 kill（exit 137 且无输出）。涉及鼠标坐标的必须 `--resolution 1280x720` |

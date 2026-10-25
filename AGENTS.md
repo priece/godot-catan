@@ -60,7 +60,8 @@ $GODOT --headless --path . --script res://tools/verify_topology.gd    # 19/54/72
 $GODOT --headless --path . --script res://tools/test_rules.gd         # 46 rule unit tests
 $GODOT --headless --path . --script res://tools/test_trade_dialog.gd  # 24 bank-trade-dialog unit tests
 $GODOT --headless --path . --script res://tools/test_dev_dialog.gd    # 56 dev-card/turn-split unit tests
-$GODOT --headless --path . --script res://tools/test_seed.gd          # seed parsing + official number rules
+$GODOT --headless --path . --script res://tools/test_setup_dialog.gd  # 25 new-game-dialog tests (per-AI difficulty, no seed box)
+$GODOT --headless --path . --script res://tools/test_seed.gd          # board randomness + official number rules
 $GODOT --headless --path . --script res://tools/test_pick.gd          # touch picking, "vertex wins" geometry
 $GODOT --headless --path . --script res://tools/test_safe_area.gd     # safe-area insets + board/HUD layout math
 $GODOT --headless --path . --script res://tools/test_layout.gd         # portrait split math: board_rect / panel_rect / content_rect + desktop zero-drift
@@ -104,6 +105,11 @@ $GODOT --path . --resolution 720x1280 --script res://tools/shot_pgrid.gd
   close the legend, and none of those clicks build anything. It also
   writes a 2× crop of the top-left corner (`*_zoom.png`) — the button and the legend are both in that
   tiny patch, easy to miss at full size.
+- `shot_dialog.gd` checks the **new-game dialog** end to end: it must pop up by itself on launch, it must
+  contain **no seed input** (the board is randomised every game now), a real mouse click on a difficulty
+  chip must change the selection, 「开始游戏」 must start a game with the chosen difficulties *and a fresh
+  seed*, and 「重开一局」 must reopen the same dialog with the current difficulties pre-filled and 「取消」
+  enabled. It needs press **and** release on each click — see trap 24.
 - `probe_legend.gd` is a read-only probe: prints the legend's size and what it covers (hexes, vertices,
   port badges). Handy after editing legend copy/rows — cheaper than eyeballing a screenshot.
 - `probe_ports.gd` prints, for all 9 port edges, the angle between the **radial** direction and the
@@ -385,6 +391,24 @@ Read this section before debugging anything UI- or generation-related.
     An empty-but-visible wrapper still occupies its cell (min size 0), so blank cells render as
     intentional negative space and positions never jump between phases.
 
+24. **A `push_input` click needs *press and release* to fire a `Button`, but only press to hit the
+    board.** `BaseButton.action_mode` defaults to `ACTION_MODE_BUTTON_RELEASE`, so a press-only synthetic
+    click (the pattern `shot_help.gd` uses on the board) silently does nothing on a button — the test
+    looks green because it never asserts the effect. `shot_dialog.gd::_click` sends motion → press →
+    release. Same family of trap: a **toggle** button reads as "selected" only through
+    `button_pressed`, and its `pressed` stylebox must be overridden together with `hover_pressed`
+    (otherwise hovering a selected chip falls back to Godot's dark default theme and the white text
+    disappears).
+
+25. **The board is randomised every game — the seed is no longer a player-facing knob.**
+    `GameDirector.start_game(diffs)` rolls a fresh seed per game (`_roll_seed`, independent RNG + a
+    counter so two clicks can never collide); the old seed `LineEdit` and its `"r"` / `""` parsing are
+    gone, and `test_seed.gd` no longer tests parsing. To reproduce one specific map use
+    `--seed=NNN` (parsed in `GameDirector._ready`); do not reintroduce a seed field in the UI.
+    Launch flow: interactive start shows the new-game dialog first (`HUD.show_new_game_dialog`), while
+    `auto` mode starts immediately — otherwise every screenshot/regression script would sit on an
+    unclicked modal.
+
 ---
 
 ## Definition of done
@@ -397,6 +421,7 @@ Before considering a change complete, run these and make sure they are green:
 | `test_rules.gd` | `通过 62 · 失败 0` / PASS（含修路卡免费路「可凭空放 + 孤立路端可建村」） |
 | `test_trade_dialog.gd` | `通过 24 · 失败 0` / PASS |
 | `test_dev_dialog.gd` | `通过 56 · 失败 0` / PASS（含 begin_turn 与 start_turn+roll_dice 骰子序列一致） |
+| `test_setup_dialog.gd` | `25 通过 / 0 失败`（难度互斥与回填、弹窗内无输入框、回车/Esc 行为） |
 | `test_seed.gd` | all checks pass |
 | `test_safe_area.gd` | `通过 18 · 失败 0` / PASS（含桌面棋盘原点仍为 (510, 360)） |
 | `test_layout.gd` | `通过 29 · 失败 0` / PASS（竖屏自检表 66.12 / 62.96 / 45.3 + 桌面零漂） |
@@ -404,7 +429,7 @@ Before considering a change complete, run these and make sure they are green:
 | `test_ports.gd` | `通过 51 · 失败 0` / PASS（牌面一个字，牌心横向偏移 < 0.002；不压地块、不重叠） |
 | `sim_runner.gd -- 30` | `不变量：棋盘异常 0 · 资源守恒破坏 0 · 状态完整性破坏 0` and `M1 验收结果：PASS` |
 | `test_interaction.gd -- 6000` | `M2 验收结果：PASS` |
-| `shot_dialog.gd` | `--- 结果：PASS ---` |
+| `shot_dialog.gd` | `--- 结果：PASS ---`（开局自动弹窗、真实点击选难度、开始后换新种子、局中重开回填难度） |
 | `shot_help.gd` | 点击后 `legend_open=true`、点面板亦 `误落子 0 次`、点棋盘 / 右侧面板 / 面板本体都 `legend_open=false`，PNG written |
 | `shot_portrait.gd`（`--resolution 720x1280`，禁止 headless） | `竖屏分区渲染验证：PASS`（分区断言 + 日志弹窗点击 / Esc + 点信息区关图例，PNG written） |
 | `shot_pgrid.gd`（`--resolution 720x1280`，禁止 headless） | 三张 PNG（主阶段 / 掷骰前 / AI 回合）写出，网格无错位、无孤儿按钮 |

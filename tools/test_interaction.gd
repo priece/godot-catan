@@ -56,6 +56,14 @@ func _on_frame() -> void:
 		if not _grab():
 			return
 		director.ai_delay = 0.01   # 让 AI 快速推进，测试不必等演出
+		# 交互式启动会先弹「新开一局」等玩家选难度（auto 演示模式才直接开）。
+		# 这里走「开始游戏」按钮的同一个处理流程，用弹窗默认难度开局。
+		if director.ctl == null:
+			hud._fire_new_game()
+		if director.ctl == null:
+			print("!! 开局弹窗没能开出对局")
+			_finish()
+			return
 		# 强制覆盖一条容易漏的路径：修路卡的免费路必须「打出即刻放」，掷骰前就能放。
 		# 不注入的话，这副随机牌里未必抽得到修路卡，这段验收就形同虚设。
 		director.ctl.st.players[0].dev_cards.append(Res.Dev.ROAD_BUILDING)
@@ -359,13 +367,17 @@ func _finish() -> void:
 		print("OK 日志全量保留：共 %d 条，最早那条仍在" % st.log_lines.size())
 
 	# "重开一局"：状态要真的重置，且日志要延续而不是清空。
-	# ⚠️ restart_pressed 现在带一个参数（种子输入框的文本）。
-	# 传 "" = 沿用上一局种子，这样测试仍是确定性的；漏传参数会直接报
-	# "Method expected 1 argument(s), but called with 0"。
+	# ⚠️ new_game_pressed 的参数是**难度数组**（界面上已没有种子输入框，
+	# 种子每局由 GameDirector 随机）。这里传当前难度 = 界面上的默认选择。
 	var log_before: int = st.log_lines.size()
-	hud.restart_pressed.emit("")
+	var seed_before: int = director.seed_value
+	hud.new_game_pressed.emit(director.ai_difficulties.duplicate())
 	var st2 := director.ctl.st
 	var fresh := st2.round <= 1
+	# 种子必须换了一张新地图（"每次开局都随机"是本需求的核心）
+	if director.seed_value == seed_before:
+		fresh = false
+		print("!! 重开后种子没变（%d）—— 每局必须随机" % seed_before)
 	for p in st2.players:
 		if not p.roads.is_empty() or not p.settlements.is_empty() or p.total_resources() > 0:
 			fresh = false

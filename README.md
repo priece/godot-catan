@@ -22,8 +22,8 @@ You play against 2–3 AI opponents in three difficulty tiers. No networking, no
 - **Official board generation rules.** 6 and 8 are never adjacent, and no two adjacent hexes share a
   number — exactly as the official Almanac requires (and nothing more).
 - **A real, playable UI**: hand-painted hex board with terrain artwork, click-to-build with legality
-  highlighting, bank trading, development cards, a full untruncated event log, and a restart panel with
-  seed control.
+  highlighting, bank trading, development cards, a full untruncated event log, and a new-game dialog
+  where you pick a difficulty for each AI (the board is randomised every game).
 - **One layout, three shapes.** Desktop keeps the pixel-exact 1280×720 baseline; wider windows pin the
   panel to the right edge and centre the board in what is left; a phone turns the whole thing into
   portrait — board on top, info area spanning the width below, event log collapsed into a button and a
@@ -47,10 +47,10 @@ You play against 2–3 AI opponents in three difficulty tiers. No networking, no
 | Bonus points | Longest road (+2), largest army (+2) |
 | Mechanics | Robber & stealing, discard on 7, maritime trade (3:1 / 2:1 ports), domestic trade |
 | Victory | First to 10 victory points on your own turn |
-| UI | Terrain-illustrated board, click-to-build, legality + affordability highlighting, folded `?` legend (terrain → resource, build → cost), bank-trade dialog, dev card panel, full event log, restart dialog with seed |
+| UI | Terrain-illustrated board, click-to-build, legality + affordability highlighting, folded `?` legend (terrain → resource, build → cost), bank-trade dialog, dev card panel, full event log, new-game dialog (per-AI difficulty, random board) |
 | Layout | Desktop (1280×720) · wide windows · phone portrait, auto-detected; phone safe-area insets; portrait locked on handhelds only |
 | Touch | Vertex-first picking — a tap inside a highlighted vertex can never fire a road; the open legend swallows its own clicks |
-| Tooling | Geometry assertions, rule unit tests, batch simulation, seed tests, layout math tests, render screenshots, simulated-click acceptance test |
+| Tooling | Geometry assertions, rule unit tests, batch simulation, randomness tests, dialog unit test, layout math tests, render screenshots, simulated-click acceptance test |
 
 **Not implemented yet** (see [Status](#status)): player-to-player trade UI, choosing for
 discard / monopoly / year-of-plenty, animations and sound, tutorial, save/load, settings page.
@@ -128,7 +128,7 @@ always comes first — only then can you build or trade:
 | Move the robber | When you roll a 7 or play a Knight, click the target hex |
 | Read the legend | The **?** button in the top-left; terrain → resource on the left, build → cost on the right |
 | Read / scroll the log | Right-hand panel in landscape; **查看日志** button + dialog in portrait |
-| Restart with a new board | **重开一局** → type or pick a seed → **确定** |
+| Restart with a new board | **重开一局** → pick a difficulty for each AI → **开始游戏** |
 
 The info panel lists every player's name, victory points, resource counts and current status, followed
 by the **event log** — on the right in landscape, spanning the width below the board in portrait. The
@@ -138,9 +138,12 @@ total. In portrait it lives behind the **查看日志** button in a full-screen 
 **Notes.** Cyan outlines mark legal *and affordable* placements (legality alone is not enough — you may
 not be able to pay). The **?** legend is collapsed by default, it is **modal** — one tap anywhere
 (board, the panel itself, the right-hand info panel) closes it — and the tap that closes it never
-builds anything. Press **Esc** to close any dialog. The restart dialog accepts
-digits only: type a seed and press Enter or click **确定**, or use **随机一局** / **沿用本局** for the
-two shortcuts.
+builds anything. Press **Esc** to close any dialog (except before the first game — there is nothing to go
+back to then). The **new-game dialog** is the same panel in both cases: it pops up by itself before the
+first game so you can pick a difficulty (简单 / 标准 / 困难, default one easy + two medium) for **小红 /
+小橙 / 小绿**, then **开始游戏** deals the cards. Mid-game **重开一局** reopens it to change the lineup
+and adds a **取消** button. The board is **randomised every game** — no seed to type. To reproduce one
+specific map from the log, launch with `--seed=123456`.
 
 **Road Building card.** Its two roads are *free*: they may be placed on **any empty edge**, without
 connecting to your existing network (and the second need not touch the first) — this is the official
@@ -192,8 +195,8 @@ Generation uses rejection sampling and **fails loudly** (`push_error`) rather th
 invalid board. The rule is additionally asserted by `Board.self_check()` — which every simulated game
 calls — and by `tools/test_seed.gd`.
 
-Boards are deterministic: the same seed always yields the same island. Set the seed in the restart
-dialog, or the `seed_value` export on `BoardView` / `GameDirector` in the inspector.
+Boards are deterministic: the same seed always yields the same island. `GameDirector` rolls a fresh
+seed every game; to reproduce one map launch with `--seed=123456` (there is no seed field in the UI).
 
 ---
 
@@ -220,7 +223,7 @@ portrait_start.sh / .bat   launch in a portrait window (phone layout preview)
 |---|---|---|
 | `verify_topology.gd` | yes | Asserts 19 hexes / 54 vertices / 72 edges and the degree distributions |
 | `test_rules.gd` | yes | 62 rule unit tests (incl. the free-road ruling for the Road Building card) |
-| `test_seed.gd` | yes | Seed parsing + the official number-placement rules |
+| `test_seed.gd` | yes | Unique random seeds + the official number-placement rules |
 | `test_pick.gd` | yes | Touch picking: a tap inside a highlighted vertex must never fire a road |
 | `test_layout.gd` | yes | Landscape / portrait split math — and that the desktop baseline stays byte-for-byte untouched |
 | `test_safe_area.gd` | yes | Phone safe-area insets + board/HUD layout math (desktop origin must stay (510, 360)) |
@@ -228,9 +231,10 @@ portrait_start.sh / .bat   launch in a portrait window (phone layout preview)
 | `test_ports.gd` | yes | Port badges: one glyph each (`?` / 木砖羊麦矿), and each badge centre must sit on its edge's perpendicular bisector |
 | `test_trade_dialog.gd` | yes | Bank-trade dialog unit tests |
 | `test_dev_dialog.gd` | yes | Dev-card / turn-split unit tests |
+| `test_setup_dialog.gd` | yes | New-game dialog: per-AI difficulty (exclusive + pre-filled), **no seed box**, Enter/Esc |
 | `sim_runner.gd` | yes | Batch games, win-rate matrix, conservation invariants |
 | `screenshot.gd` | **no** | Renders the board to a PNG with a self-check |
-| `shot_dialog.gd` | **no** | Drives the restart dialog and captures it |
+| `shot_dialog.gd` | **no** | New-game dialog: auto-opens, real click on a difficulty, fresh seed after start, pre-filled on restart |
 | `shot_trade_dialog.gd` | **no** | Captures the bank-trade dialog |
 | `shot_dev_dialog.gd` | **no** | Captures the dev-card dialog |
 | `shot_help.gd` | **no** | Clicks the "?" legend button, captures open/closed + a simulated phone safe area; also clicks a board vertex sitting under the open panel |
