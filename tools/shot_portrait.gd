@@ -94,7 +94,12 @@ func _step0() -> void:
 	_check("_bg 按 panel_rect 摆放", _hud._bg.position.is_equal_approx(pr.position)
 		and _hud._bg.size.is_equal_approx(pr.size))
 	var cr := Layout.content_rect(vp, ins)
-	_check("_box 按 content_rect 摆放", _hud._box.position.is_equal_approx(cr.position)
+	# 实际值一起打出来：容器被最小尺寸撑大时，光说"没对上"看不出是被谁撑的
+	_check("_box 按 content_rect 摆放（实际 pos %.1f,%.1f size %.1f×%.1f / 期望 %.1f,%.1f %.1f×%.1f · min %.1f）" % [
+		_hud._box.position.x, _hud._box.position.y, _hud._box.size.x, _hud._box.size.y,
+		cr.position.x, cr.position.y, cr.size.x, cr.size.y,
+		_hud._box.get_combined_minimum_size().y],
+		_hud._box.position.is_equal_approx(cr.position)
 		and _hud._box.size.is_equal_approx(cr.size))
 	_check("内容盒不越安全区（右缘 %.0f ≤ %.0f，底缘 %.0f ≤ %.0f）" % [
 		cr.end.x, vp.x - ins.z, cr.end.y, vp.y - ins.w],

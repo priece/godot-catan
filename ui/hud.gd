@@ -30,6 +30,21 @@ const PANEL_W := 384.0
 
 const DEV_LABEL := ["骑士", "胜利点", "修路", "丰收年", "垄断"]
 
+## 竖屏操作按钮的图标。原图 2048² 在 assets/resource.src/（`.gdignore`，不进导入），
+## 这里用抠掉假棋盘格底、缩到 384 的导入版（assets/buttons/）。
+## 键 = 语义（与按钮一一对应），值 = 文件名。**只有竖屏用**：
+## 横屏那排 30px 细条按钮照旧纯文字，桌面 1280×720 逐像素基线不动。
+const ICON_DIR := "res://assets/buttons/"
+const ICON_FILES := {
+	"dice": "4_dice.png",           ## 掷骰子
+	"end_turn": "1_end_turn.png",   ## 结束回合
+	"buy_card": "5_buy_card.png",   ## 买发展卡
+	"exchange": "6_exchange.png",   ## 银行兑换
+	"play_card": "2_play_card.png", ## 打发展卡
+	"game_log": "3_game_log.png",   ## 查看日志
+	"restart": "7_restart.png",     ## 重开一局
+}
+
 ## 选卡弹窗里的效果说明。玩家得先知道打出会发生什么，才谈得上选择。
 const DEV_TIP := {
 	Res.Dev.KNIGHT: "移动强盗到任意地块，封住该地产出，并从相邻的对手手里偷 1 张牌",
@@ -71,23 +86,28 @@ var _row_nodes: Array = []      ## 每行：外框节点（用于挂 tooltip）
 
 var _status: Label
 var _dice: Label
-var _btn_end: Button
+var _btn_end: Button            ## 横屏专用；竖屏里这两个角色由 _btn_turn 一个按钮兼任
 var _btn_buy: Button
 var _btn_restart: Button
 ## 「掷骰子」/「打发展卡」：回合开始的掷骰前窗口里才有掷骰子，
 ## 打发展卡则掷骰前后都能点（官方规则允许骑士等卡在掷骰前打出）。
-var _btn_roll: Button
+var _btn_roll: Button           ## 横屏专用（竖屏见 _btn_turn）
 var _btn_play: Button
 var _act_row: HBoxContainer    ## 结束回合 / 买发展卡 / 兑换 —— 掷骰前整行隐藏
 ## 竖屏操作网格（仅竖屏创建，横屏为 null）：3 列 × 2 行的大号按钮。
-## A 行 = 本阶段动作：掷骰子（掷骰前）/ 结束回合（主阶段）共用一个格子互斥显示、
-## 买发展卡、兑换；B 行 = 常驻：打发展卡、查看日志、重开一局。
-## ⚠️ 六个格子用空容器占位且**永不隐藏**（GridContainer 会跳过隐藏子节点、
-## 格子会流动重排）；切阶段只改格内按钮的 visible，方块位置永远不跳。
+##   ┌──────────────┬──────────┬──────────────┐
+##   │ 掷骰 / 结束   │  兑换     │  买发展卡     │
+##   ├──────────────┼──────────┼──────────────┤
+##   │ 打发展卡      │ 查看日志  │  重开一局     │
+##   └──────────────┴──────────┴──────────────┘
+## 七个按钮**永远 visible**，阶段变化只改 disabled / 图标 / 文案：
+## 藏按钮会让 GridContainer 收掉整行、面板高度跟着跳（AI 回合最明显）。
 var _act_grid: GridContainer
-var _slot_roll: HBoxContainer   ## A1：掷骰子 / 结束回合 共格
-var _slot_buy: HBoxContainer    ## A2：买发展卡（仅主阶段有内容）
-var _slot_trade: HBoxContainer  ## A3：兑换（仅主阶段有内容）
+## A1「掷骰子 / 结束回合」是**同一个** Button —— 只换图标和文案，节点不动。
+## 两个按钮轮流隐藏的话，格子高度会随图标空出来的一段变化。
+var _btn_turn: Button
+var _portrait_turn_end := false  ## 上面那个按钮此刻是「结束回合」（true）还是「掷骰子」
+var _slot_turn: HBoxContainer    ## A1 格子
 ## 银行兑换弹窗（替代原来那排"点一下即换"的按钮）：
 ## 左列 = 可付出的资源（带当前比例 4/3/2），右列 = 换回的资源，
 ## 两侧都能点选高亮，底部 确定/取消。
@@ -515,13 +535,25 @@ func _build() -> void:
 	_log = _make_log_view()
 	box.add_child(_log)
 
+## 图标纹理（加载失败返回 null，调用处退化成纯文字按钮）。
+## 引擎自己会缓存已加载资源，这里不另做缓存表。
+func _btn_icon(key: String) -> Texture2D:
+	var file: String = ICON_FILES.get(key, "")
+	if file == "":
+		return null
+	var path := ICON_DIR + file
+	if not ResourceLoader.exists(path):
+		push_warning("竖屏按钮图标缺失：%s" % path)
+		return null
+	return load(path) as Texture2D
+
 ## 竖屏（触控）操作区：状态/骰子并排一行 + 3×2 方块按钮网格。
 ##
 ## 手机上是手指操作，横屏那套 30px 高的细条按钮完全戳不准，
 ## 所以竖屏重排为大方块（鸣叔要求的 1:1 宽高比，见 _fit_portrait_actions）：
-##   A 行 = 本阶段动作：[掷骰子(掷骰前)/结束回合(主阶段) 共格互斥] [买发展卡] [兑换]
-##   B 行 = 常驻：[打发展卡] [查看日志] [重开一局]
-## 格子用空容器占位，切阶段只改按钮 visible，按钮位置不跳；
+##   第一行 = [掷骰子/结束回合 同一个按钮] [兑换] [买发展卡]
+##   第二行 = [打发展卡] [查看日志] [重开一局]
+## 两行的**形状固定**：任何一个按钮都只置灰、不隐藏，面板高度不会因阶段跳变。
 ## 「重开一局」从标题行挪到这里，与另两个常驻按钮凑满一行，标题行只留标题。
 func _build_portrait_actions(box: VBoxContainer) -> void:
 	# 状态行：提示与轮次骰子并排，省一行高度留给按钮
@@ -542,50 +574,48 @@ func _build_portrait_actions(box: VBoxContainer) -> void:
 	_act_grid.add_theme_constant_override("v_separation", 8)
 	box.add_child(_act_grid)
 
-	# A1：掷骰子 / 结束回合 共格互斥（掷骰前只能掷骰，主阶段只能结束回合）
-	_slot_roll = _grid_slot()
-	_act_grid.add_child(_slot_roll)
-	_btn_roll = _portrait_button("掷骰子", true)
-	_btn_roll.tooltip_text = "掷两颗骰子，结算本回合产出"
-	_btn_roll.pressed.connect(func(): roll_dice_pressed.emit())
-	_slot_roll.add_child(_btn_roll)
-	_btn_end = _portrait_button("结束回合", true)
-	_btn_end.pressed.connect(func(): end_turn_pressed.emit())
-	_slot_roll.add_child(_btn_end)
+	# 第一行 1 列：掷骰子 / 结束回合 **同一个按钮**，只换图标和文案。
+	# 两种状态互斥（掷骰前只能掷骰、主阶段只能结束回合），换节点没有意义，
+	# 反而会因为图标高度不同把格子撑得一跳一跳。
+	_slot_turn = _grid_slot()
+	_act_grid.add_child(_slot_turn)
+	_btn_turn = _portrait_button("掷骰子", true, "dice")
+	_btn_turn.tooltip_text = "掷两颗骰子，结算本回合产出"
+	_btn_turn.pressed.connect(_on_portrait_turn_pressed)
+	_slot_turn.add_child(_btn_turn)
 
-	_slot_buy = _grid_slot()
-	_act_grid.add_child(_slot_buy)
-	_btn_buy = _portrait_button("买发展卡")
-	_btn_buy.pressed.connect(func(): buy_dev_pressed.emit())
-	_slot_buy.add_child(_btn_buy)
-
-	_slot_trade = _grid_slot()
-	_act_grid.add_child(_slot_trade)
-	_btn_trade = _portrait_button("兑换")
+	# 第一行 2、3 列：兑换 / 买发展卡（常驻可见，没得换 / 买不起时置灰）
+	var slot_trade := _grid_slot()
+	_act_grid.add_child(slot_trade)
+	_btn_trade = _portrait_button("兑换", false, "exchange")
 	_btn_trade.tooltip_text = "与银行兑换资源：4:1，任意型港口 3:1，特定型港口 2:1"
 	_btn_trade.pressed.connect(show_trade_dialog)
-	_slot_trade.add_child(_btn_trade)
+	slot_trade.add_child(_btn_trade)
 
-	# B 行常驻。打发展卡掷骰前后都能打；查看日志 / 重开一局任何时候都可用。
-	# 这三个也各自占固定格子 —— 否则掷骰前 A 行整行隐藏时，
-	# 它们会被 GridContainer 往前流动重排（重开一局掉到第三行）。
+	var slot_buy := _grid_slot()
+	_act_grid.add_child(slot_buy)
+	_btn_buy = _portrait_button("买发展卡", false, "buy_card")
+	_btn_buy.pressed.connect(func(): buy_dev_pressed.emit())
+	slot_buy.add_child(_btn_buy)
+
+	# 第二行常驻。打发展卡掷骰前后都能打；查看日志 / 重开一局任何时候都可用。
 	var slot_play := _grid_slot()
 	_act_grid.add_child(slot_play)
-	_btn_play = _portrait_button("打发展卡")
+	_btn_play = _portrait_button("打发展卡", false, "play_card")
 	_btn_play.tooltip_text = "打出 1 张发展卡：掷骰前、掷骰后都可以，每回合限 1 张"
 	_btn_play.pressed.connect(show_dev_dialog)
 	slot_play.add_child(_btn_play)
 
 	var slot_log := _grid_slot()
 	_act_grid.add_child(slot_log)
-	_btn_log = _portrait_button("查看日志（0 条）")
+	_btn_log = _portrait_button("查看日志（0 条）", false, "game_log")
 	_btn_log.tooltip_text = "事件只增不减，点开看全部历史"
 	_btn_log.pressed.connect(open_log_dialog)
 	slot_log.add_child(_btn_log)
 
 	var slot_restart := _grid_slot()
 	_act_grid.add_child(slot_restart)
-	_btn_restart = _portrait_button("重开一局")
+	_btn_restart = _portrait_button("重开一局", false, "restart")
 	_btn_restart.tooltip_text = "放弃当前这局，重新开始（可以顺便改对手难度；日志保留）"
 	_btn_restart.pressed.connect(_open_new_game_dialog)
 	slot_restart.add_child(_btn_restart)
@@ -601,10 +631,16 @@ func _grid_slot() -> HBoxContainer:
 	slot.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return slot
 
+## 竖屏网格里的七个按钮（顺序与棋盘格摆放无关，只用于批量置灰 / 统一行高）。
+func _portrait_buttons() -> Array:
+	return [_btn_turn, _btn_trade, _btn_buy, _btn_play, _btn_log, _btn_restart]
+
 ## 竖屏：把扣除其余内容后的剩余高度平分给操作网格的每一行，
 ## 让按钮尽量接近 1:1 方块（手机上最好戳的尺寸）。
 ## 高度以格宽为上限 —— 再高就变成竖条了；矮屏（iPad 3:4）退化成稍扁的横条。
-## 在 _apply_layout（视口变化）和 refresh（阶段切换改变网格行数）里都要调。
+## 行数**恒为 2**（七个按钮常驻，见 _build_portrait_actions），
+## 所以这里不需要再按 visible 数行数 —— 阶段切换绝不会改变按钮高度。
+## 在 _apply_layout（视口变化）和 refresh（阶段切换）里都要调。
 func _fit_portrait_actions() -> void:
 	if _act_grid == null or _box.size.y <= 0.0:
 		return
@@ -615,16 +651,44 @@ func _fit_portrait_actions() -> void:
 			continue
 		used += (c as Control).get_combined_minimum_size().y
 		shown += 1
-	# B 行（打发展卡/查看日志/重开一局）常驻算一行；
-	# A 行只有掷骰子/结束回合/买发展卡/兑换任一可见时才存在
-	var rows := 1
-	if _btn_roll.visible or _btn_end.visible or _btn_buy.visible or _btn_trade.visible:
-		rows = 2
+	var rows := 2
 	var gaps := 7.0 * shown + 8.0 * (rows - 1)   # _box 间距 7 + 网格行间距 8
-	var cell_w := (_box.size.x - 16.0) / 3.0     # 两列间距各 8
-	var h := clampf((_box.size.y - used - gaps) / rows, 48.0, cell_w)
-	for b in [_btn_roll, _btn_end, _btn_buy, _btn_trade, _btn_play, _btn_log, _btn_restart]:
+	var cell_w := floorf((_box.size.x - 16.0) / 3.0)   # 两列间距各 8
+	# 取整：Godot 的容器最小尺寸按整数像素累计，若留 262.67 这种小数，
+	# 两行各进 1px 就会把 _box 顶大 1~2px，竖屏验收（shot_portrait）立刻失败
+	var h := clampf(floorf((_box.size.y - used - gaps) / rows), 48.0, cell_w)
+	for b: Button in _portrait_buttons():
 		b.custom_minimum_size = Vector2(0, h)
+
+## 把 A1 那个共用按钮切到「掷骰子」或「结束回合」：文案、图标、tooltip 一起换。
+## 只换内容不换节点，格子高度因此保持不动。
+func _set_portrait_turn(end_mode: bool) -> void:
+	_portrait_turn_end = end_mode
+	if _btn_turn == null:
+		return
+	_btn_turn.text = "结束回合" if end_mode else "掷骰子"
+	_btn_turn.icon = _btn_icon("end_turn" if end_mode else "dice")
+	_btn_turn.tooltip_text = ("结束本回合，把发言权交给下一位" if end_mode
+		else "掷两颗骰子，结算本回合产出")
+
+## 共用按钮的点击分发：按当前模式发对应的信号，不必来回 connect / disconnect。
+func _on_portrait_turn_pressed() -> void:
+	if _portrait_turn_end:
+		end_turn_pressed.emit()
+	else:
+		roll_dice_pressed.emit()
+
+## 竖屏按钮状态 —— **只动 disabled，从不动 visible**。
+## 掷过骰（main_phase）= 「结束回合」，否则 = 「掷骰子」；
+## 只有真正轮到自己掷骰 / 结束回合时才可点，布置、放强盗、AI 回合一律灰着。
+func _refresh_portrait_actions(st: GameState, can_act: bool, main_phase: bool, preroll: bool) -> void:
+	_set_portrait_turn(main_phase)
+	_btn_turn.disabled = not (can_act and (main_phase or preroll))
+	_btn_buy.disabled = not (can_act and main_phase and Rules.can_buy_dev(st, 0))
+	# 开局弹窗背后 show_idle() 把七个按钮全灰过一遍，这两个永远可用、得在这里恢复
+	_btn_log.disabled = false
+	_btn_restart.disabled = false
+	_fit_portrait_actions()
 
 ## 把面板钉在视口右缘，并让它随视口高度伸缩。
 ## 1280×720（设计分辨率）下与旧版绝对坐标逐像素一致；
@@ -757,44 +821,41 @@ func refresh(st: GameState, status: String, can_act: bool, main_phase: bool = tr
 	_status.add_theme_color_override("font_color",
 		UIPalette.GOOD if can_act else UIPalette.INK)
 
-	# 掷骰前只留「掷骰子 + 打发展卡」，主阶段才给建造/交易/结束回合。
+	# 横屏：掷骰前只留「掷骰子 + 打发展卡」，主阶段才给建造/交易/结束回合。
 	# 隐藏而不是置灰：灰按钮会让玩家以为"再等等就能点"，实际这个窗口里永远点不了。
 	#
 	# 「打发展卡」掷骰前后都能打，永远显示 —— 但开局弹窗背后的空面板会临时把它
 	# 藏起来（见 show_idle），所以这里要显式恢复，别指望它一直是 visible。
 	_btn_play.visible = true
 	if Layout.is_portrait():
-		# 竖屏网格：掷骰子与结束回合共格互斥；买发展卡/兑换只在主阶段出现。
-		# ⚠️ 格子（_slot_*）永远 visible，只藏格内按钮 —— 隐藏格子会让
-		# GridContainer 把后面的按钮流动重排（重开一局掉到下一行）。
-		_btn_roll.visible = preroll
-		_btn_end.visible = main_phase
-		_btn_buy.visible = main_phase
-		_btn_trade.visible = main_phase
-		_fit_portrait_actions()
+		# 竖屏：3×2 网格形状固定，只切 disabled / 图标 / 文案（绝不藏按钮）
+		_refresh_portrait_actions(st, can_act, main_phase, preroll)
 	else:
 		_act_row.visible = main_phase
 		_btn_roll.visible = preroll
-	_btn_end.disabled = not (can_act and main_phase)
-	_btn_buy.disabled = not (can_act and main_phase and Rules.can_buy_dev(st, 0))
+		_btn_end.disabled = not (can_act and main_phase)
+		_btn_buy.disabled = not (can_act and main_phase and Rules.can_buy_dev(st, 0))
 
 	_refresh_trade(st, can_act and main_phase)
 	_refresh_dev_btn(st, can_act)
 
-## 还没开局时的"空面板"外观：把与阶段相关的按钮全藏起来。
+## 还没开局时的"空面板"外观：竖屏把按钮全置灰，横屏把阶段相关的那几行藏起来。
 ##
 ## 开局弹窗就浮在这个状态上（GameDirector 先弹窗、再开局），而 refresh()
-## 此时还没跑过 —— 于是「掷骰子」和「结束回合」会同时挤在竖屏的同一个格子里。
-## 只藏按钮不置灰：这个状态下一秒就会被 refresh() 接管。
+## 此时还没跑过。竖屏**只置灰不隐藏**：一藏就会收掉整行，开局的瞬间面板
+## 高度会跳一下；灰着则一眼看出"还没开始"。
 func show_idle() -> void:
 	if Layout.is_portrait():
-		# 隐藏格内按钮，格子本身留着（见 _build_portrait_actions 的说明）
-		for b in [_btn_roll, _btn_end, _btn_buy, _btn_trade]:
-			b.visible = false
+		for b: Button in _portrait_buttons():
+			b.disabled = true
+		_set_portrait_turn(false)      # 定格在「掷骰子」，图标和文案别停在上局的状态
+		# 下面两个刷新函数有"签名缓存"，不重置的话开局后不会重新算 disabled
+		_trade_sig = ""
+		_dev_sig = ""
 		_fit_portrait_actions()
-	else:
-		_act_row.visible = false
-		_btn_roll.visible = false
+		return
+	_act_row.visible = false
+	_btn_roll.visible = false
 	# 打发展卡也藏（没开局，打了也没意义）；refresh() 会把它恢复
 	_btn_play.visible = false
 
@@ -1542,10 +1603,25 @@ func _button(text: String, primary: bool = false, font_size: int = 12,
 		b.add_theme_stylebox_override(state, sb)
 	return b
 
-## 竖屏操作网格用的大号按钮：16px 字号 + 14 圆角 + 投影，格子内双向扩满。
+## 竖屏操作网格用的大号按钮：14 圆角 + 投影，格子内双向扩满。
 ## 颜色与 _button 同一套逻辑（primary = 蓝底白字主操作），只改尺寸参数。
-func _portrait_button(text: String, primary: bool = false) -> Button:
-	var b := _button(text, primary, 16, 14, 12, true)
+##
+## icon_key 非空时把对应图标贴在按钮上半部（图在上、标题在下）：
+## `expand_icon` 让图标随格子缩放并保持比例，且**不参与最小尺寸**（实测
+## 225×180 的格子 min 仍是 56×180）—— 所以 _fit_portrait_actions 的
+## 行高算式不受影响。图标是独立的 Texture2D，禁用时靠主题色自动变淡。
+func _portrait_button(text: String, primary: bool = false, icon_key: String = "") -> Button:
+	var b := _button(text, primary, 14, 14, 10, true)
 	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	b.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var tex: Texture2D = _btn_icon(icon_key) if icon_key != "" else null
+	if tex != null:
+		b.icon = tex
+		b.expand_icon = true
+		# 默认 icon_alignment 是 LEFT：图标会被顶到左上角、文字挤到右半边。
+		# 图标居中 + 文字在下方（vertical_icon_alignment=TOP）才是"上图下字"。
+		b.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		b.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
+		# 默认禁用色把图标压得太淡，抬一点：仍能看出是"灰了"，但不至于消失
+		b.add_theme_color_override("icon_disabled_color", Color(1, 1, 1, 0.45))
 	return b

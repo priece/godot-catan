@@ -4,9 +4,9 @@ extends SceneTree
 ## shot_portrait.gd 走 auto 演示，人类座位被 AI 占掉，永远看不到
 ## 掷骰前 / 主阶段两个关键界面；这里像 shot_trade_dialog.gd 一样只挂 HUD、
 ## 手动造局面喂 refresh()，把三种阶段状态各截一张：
-##   1. 主阶段（结束回合/买发展卡/兑换 + 常驻行）
-##   2. 掷骰前（掷骰子与打发展卡共格互斥，A2/A3 空格）
-##   3. AI 回合（A 行整体隐藏，只剩常驻行）
+##   1. 主阶段（结束回合/兑换/买发展卡 + 常驻行）
+##   2. 掷骰前（同一个按钮换成「掷骰子」，兑换 / 买发展卡置灰）
+##   3. AI 回合（第一行三个全灰，两行形状与高度都不变）
 ##
 ## 跑法（禁止 --headless）：Godot --path . --resolution 720x1280 --script res://tools/shot_pgrid.gd
 ## ⚠️ SceneTree --script 上下文没有 user://，PNG 写到当前工作目录（_1_main.png 等）。

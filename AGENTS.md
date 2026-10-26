@@ -65,6 +65,7 @@ $GODOT --headless --path . --script res://tools/test_seed.gd          # board ra
 $GODOT --headless --path . --script res://tools/test_pick.gd          # touch picking, "vertex wins" geometry
 $GODOT --headless --path . --script res://tools/test_safe_area.gd     # safe-area insets + board/HUD layout math
 $GODOT --headless --path . --script res://tools/test_layout.gd         # portrait split math: board_rect / panel_rect / content_rect + desktop zero-drift
+$GODOT --headless --path . --script res://tools/test_portrait_grid.gd  # 24 portrait 3×2 grid tests: fixed rows, shared roll/end button, slot order
 $GODOT --headless --path . --script res://tools/test_legend.gd        # legend contents come from Res.COST_*, panel geometry
 $GODOT --headless --path . --script res://tools/test_ports.gd         # port badge wording + "centre sits on the edge's perpendicular bisector"
 $GODOT --headless --path . --script res://tools/sim_runner.gd -- 500  # 500-game batch, prints win-rate matrix
@@ -192,11 +193,14 @@ ui/       board_view.gd (_draw() board painting), hud.gd (right-hand panel, code
           safe_area.gd (DisplayServer safe-area → viewport insets, shared by board + HUD)
 scenes/   main.tscn — root Main → BoardView (Node2D), HUD (CanvasLayer), GameDirector (Node)
 tools/    20 CLI scripts — headless tests (verify_topology / test_rules / test_seed / test_pick /
-          test_safe_area / test_legend / test_ports / test_trade_dialog / test_dev_dialog / sim_runner),
+          test_safe_area / test_legend / test_ports / test_trade_dialog / test_dev_dialog /
+          test_portrait_grid / sim_runner),
           render-dependent (screenshot / shot_dialog / shot_trade_dialog / shot_dev_dialog /
           shot_help / test_interaction), probes (probe_seed.gd / probe_legend.gd / probe_ports.gd),
           crop_shot.gd (screenshot crop+zoom)
-assets/   terrain/ (imported, downscaled) and resource.src/ (all originals, .gdignore'd)
+assets/   terrain/ (imported, downscaled) · buttons/ (portrait action icons: background keyed
+          out, trimmed, downscaled to ≤384 px) · resource.src/ (all originals, .gdignore'd —
+          new art goes here first, then generate the downscaled copy into terrain/ or buttons/)
 docs/     board_preview.png and gameplay screenshots
 DESIGN.md Full design document (Chinese) — the authoritative reference
 ```
@@ -247,6 +251,22 @@ DESIGN.md Full design document (Chinese) — the authoritative reference
   it (that was the "tapping the right panel won't close the legend" bug). Only the `?` button toggles.
 - **Artwork**: all originals live in `assets/resource.src/` (read-only, `.gdignore`d so Godot never
   imports them). Derived, downscaled copies go in `assets/<type>/` for the game to use.
+- **Portrait action buttons carry an illustration** (`HUD._portrait_button(text, primary, icon_key)` →
+  `assets/buttons/`); landscape buttons stay text-only. Icon above the Chinese label is
+  `expand_icon` + `vertical_icon_alignment = TOP`, which also keeps the icon out of the button's
+  *minimum* size — so `_fit_portrait_actions()`'s row math is unchanged. `icon_alignment` must be
+  forced to `CENTER` (the default `LEFT` shoves the art into the corner and the label into the
+  right-hand strip). ⚠️ The AI-generated originals have an **opaque** fake-transparency checkerboard
+  plus a 「即梦AI」 watermark baked in; `assets/buttons/` was produced by flood-filling near-neutral
+  bright pixels from the borders and dropping small all-light components. Regenerate with the same
+  two steps or the buttons turn into grey squares in game.
+- **The portrait 3×2 grid never changes shape**: no button is ever hidden — a phase change only
+  swaps `disabled` / icon / label, because hiding a cell collapses the GridContainer row and the
+  whole panel jumps (it used to collapse during AI turns). 掷骰子 and 结束回合 are one `_btn_turn`
+  that re-labels itself and dispatches `roll_dice_pressed` / `end_turn_pressed` according to
+  `_portrait_turn_end`. `_fit_portrait_actions()` **floors** its row height on purpose: fractional
+  heights round up per row and push `_box` past `content_rect`, which `shot_portrait.gd` catches.
+  `tools/test_portrait_grid.gd` pins the visibility rule, the shared button and the slot order.
 - **UI palette**: as of the current design, 4 player colors are blue/red/orange/green and names are
   `蓝方 / 小红 / 小橙 / 小绿`.
 

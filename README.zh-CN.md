@@ -200,7 +200,7 @@ ui/       board_view.gd（_draw 手绘棋盘）· hud.gd（全代码搭建的面
           palette.gd · safe_area.gd（屏幕挖孔安全区）
 scenes/   main.tscn
 tools/    23 个命令行脚本：测试、批量对局、截图、探针
-assets/   terrain/（游戏用的缩略图）· resource.src/（原图，不让 Godot 导入）
+assets/   terrain/（游戏用的缩略图）· buttons/（竖屏按钮图标）· resource.src/（原图，不让 Godot 导入）
 docs/     预览图与对局截图
 portrait_start.sh / .bat   用竖屏窗口启动（预览手机布局）
 ```
@@ -214,6 +214,7 @@ portrait_start.sh / .bat   用竖屏窗口启动（预览手机布局）
 | `test_seed.gd` | 是 | 随机种子不撞 + 官方数字摆放规则 |
 | `test_pick.gd` | 是 | 触屏拾取：点在高亮顶点里绝不能触发修路 |
 | `test_layout.gd` | 是 | 横屏 / 竖屏分区算式——并保证桌面基线逐字节不变 |
+| `test_portrait_grid.gd` | 是 | 竖屏 3×2 操作网格：两行永不收行（只置灰、不隐藏）、掷骰子/结束回合共用一个按钮且图标与信号随阶段切换、七个格子的摆位 |
 | `test_safe_area.gd` | 是 | 手机安全区取值 + 棋盘/面板布局算式（桌面棋盘原点必须仍是 (510, 360)） |
 | `test_legend.gd` | 是 | 图例：建造花费必须取自 `Res.COST_*`，面板不越出视口 / 不压地块 |
 | `test_ports.gd` | 是 | 港口牌：牌面只有一个字（`?` / 木砖羊麦矿），且牌心必须落在所在边的垂直平分线上 |
@@ -240,6 +241,7 @@ $GODOT --headless --path . --script res://tools/test_rules.gd
 $GODOT --headless --path . --script res://tools/test_seed.gd
 $GODOT --headless --path . --script res://tools/test_pick.gd
 $GODOT --headless --path . --script res://tools/test_layout.gd
+$GODOT --headless --path . --script res://tools/test_portrait_grid.gd
 $GODOT --headless --path . --script res://tools/test_safe_area.gd
 $GODOT --headless --path . --script res://tools/test_legend.gd
 $GODOT --headless --path . --script res://tools/test_ports.gd
@@ -274,6 +276,8 @@ $GODOT --path . --resolution 720x1280 --script res://tools/shot_portrait.gd -- a
 |---|---|
 | 竖屏布局（P0–P2） | 竖屏算式单独收在 `ui/layout.gd`：棋盘在上、信息区横贯屏宽铺在下方、日志收成**查看日志** 按钮 + 全屏弹窗。横屏分支一行未动——桌面棋盘原点仍是 (510, 360)。手持设备锁竖屏，桌面窗口不受影响。 |
 | 竖屏启动脚本 | `portrait_start.sh`（macOS/Linux）与 `portrait_start.bat`（Windows）——唯一的开关就是窗口形状。 |
+| 竖屏按钮图标 | 竖屏 3×2 操作网格的七个按钮各配一张插画（掷骰子 / 结束回合 / 买发展卡 / 兑换 / 打发展卡 / 查看日志 / 重开一局），图在上、中文标题在下。原图放 `assets/resource.src/`，游戏用的是抠底缩小的 `assets/buttons/`。横屏按钮仍是纯文字。 |
+| 竖屏网格形状固定 | 3×2 网格永不收行：不可用的操作只置灰、不隐藏，切阶段或 AI 回合时面板高度不再跳变。「掷骰子」与「结束回合」合并成同一个按钮，图标与文案随阶段切换。摆位：掷骰·结束 / 兑换 / 买发展卡；打发展卡 / 查看日志 / 重开一局。 |
 | 宽屏自适应 | 面板钉在视口右缘、棋盘在剩余区域居中，超宽窗口不再把空白撑在中间。 |
 | 图例收进 **?** | 左上角按钮，默认收起，两列（左：地形→资源；右：建造→花费）。花费直接读 `Res.COST_*`，UI 里绝不另抄一份。它是**模态浮层**：点任何地方——棋盘、信息面板、甚至面板本体——都能关掉，且关掉的那一下被吞掉，看图例再也不会建出一座村庄。 |
 | 手机安全区 | 读真实挖孔 / home 条留白，按朝向分别避让棋盘、左上角按钮、图例、HUD **内容盒**（底色仍铺到屏幕边）。 |

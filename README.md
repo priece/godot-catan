@@ -212,7 +212,7 @@ ui/       board_view.gd (_draw() board) · hud.gd (code-built panel) · layout.g
           palette.gd · safe_area.gd (display cutout insets)
 scenes/   main.tscn
 tools/    23 CLI scripts: tests, batch simulation, screenshots, probes
-assets/   terrain/ (used) · resource.src/ (originals, not imported)
+assets/   terrain/ (used) · buttons/ (portrait button icons) · resource.src/ (originals, not imported)
 docs/     preview and gameplay screenshots
 portrait_start.sh / .bat   launch in a portrait window (phone layout preview)
 ```
@@ -226,6 +226,7 @@ portrait_start.sh / .bat   launch in a portrait window (phone layout preview)
 | `test_seed.gd` | yes | Unique random seeds + the official number-placement rules |
 | `test_pick.gd` | yes | Touch picking: a tap inside a highlighted vertex must never fire a road |
 | `test_layout.gd` | yes | Landscape / portrait split math — and that the desktop baseline stays byte-for-byte untouched |
+| `test_portrait_grid.gd` | yes | Portrait 3×2 grid: the two rows never collapse (grey, never hidden), roll/end share one button whose icon and signal follow the phase, slot order pinned |
 | `test_safe_area.gd` | yes | Phone safe-area insets + board/HUD layout math (desktop origin must stay (510, 360)) |
 | `test_legend.gd` | yes | Legend: build costs must come from `Res.COST_*`, panel stays inside the viewport and off the hexes |
 | `test_ports.gd` | yes | Port badges: one glyph each (`?` / 木砖羊麦矿), and each badge centre must sit on its edge's perpendicular bisector |
@@ -252,6 +253,7 @@ $GODOT --headless --path . --script res://tools/test_rules.gd
 $GODOT --headless --path . --script res://tools/test_seed.gd
 $GODOT --headless --path . --script res://tools/test_pick.gd
 $GODOT --headless --path . --script res://tools/test_layout.gd
+$GODOT --headless --path . --script res://tools/test_portrait_grid.gd
 $GODOT --headless --path . --script res://tools/test_safe_area.gd
 $GODOT --headless --path . --script res://tools/test_legend.gd
 $GODOT --headless --path . --script res://tools/test_ports.gd
@@ -286,6 +288,8 @@ real bugs here (silent theme-override failures, `text_changed` not firing on pro
 |---|---|
 | Portrait layout (P0–P2) | `ui/layout.gd` holds the portrait-only math; board on top, info area spanning the full width below, log collapsed into **查看日志** + full-screen dialog. Landscape branches are untouched — the desktop board origin is still exactly (510, 360). Handheld orientation is locked to portrait; desktop windows are unaffected. |
 | Portrait launchers | `portrait_start.sh` (macOS/Linux) and `portrait_start.bat` (Windows) — window shape is the only switch. |
+| Portrait button icons | Each of the seven portrait grid buttons now carries an illustration (dice, end turn, buy card, exchange, play card, game log, restart) with the Chinese label kept underneath. Originals sit in `assets/resource.src/`; the game uses background-keyed, downscaled copies from `assets/buttons/`. Landscape buttons stay text-only. |
+| Portrait grid holds its shape | The 3×2 grid never loses a row: unavailable actions are greyed out, never hidden, so the panel height no longer jumps between phases or during an AI turn. 掷骰子 and 结束回合 are now one button whose icon and label follow the phase. Order: 掷骰/结束 · 兑换 · 买发展卡 / 打发展卡 · 查看日志 · 重开一局. |
 | Wide-screen layout | The panel is pinned to the viewport's right edge and the board centres in the remaining area, so ultrawide windows no longer stretch the gap. |
 | Legend folded into **?** | Top-left button, collapsed by default, two columns (terrain → resource, build → cost). Costs are read from `Res.COST_*`, never copied into the UI. It is a **modal overlay**: any tap — board, info panel or the legend itself — closes it, and the closing tap is swallowed, so reading help can never build a village. |
 | Phone safe area | Real display cutout / home-bar insets, applied per orientation to the board, top-left buttons, legend and the HUD *content* box (the background still runs to the screen edge). |
